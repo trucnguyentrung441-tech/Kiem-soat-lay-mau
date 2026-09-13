@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quản lý lấy mẫu vật liệu</title>
+<style>
+  :root{
+    --navy:#152A43; --navy-2:#1E3A5C; --slate:#3D6B8C;
+    --paper:#F6F4EE; --card:#FFFFFF; --ink:#22262B; --ink-soft:#5B6470;
+    --line:#DEDACB; --amber:#B9770A; --amber-bg:#FBF0DC;
+    --green:#2F7A45; --green-bg:#E4F3E6; --red:#B23A2E; --red-bg:#FBE7E3;
+    --blue-bg:#E7EEF4; --radius:6px;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:var(--sans);background:var(--paper);color:var(--ink);}
+  .mono{font-family:var(--mono);}
+  #app{display:flex;min-height:100vh;}
+  .sidebar{width:236px;flex:none;background:var(--navy);color:#fff;display:flex;flex-direction:column;padding:20px 0;position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;}
+  .brand{padding:0 20px 18px 20px;border-bottom:1px solid rgba(255,255,255,.12);margin-bottom:10px;}
+  .brand-title{font-weight:700;font-size:15px;line-height:1.3;}
+  .brand-sub{font-size:11px;color:#9FB4C9;margin-top:4px;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:11px 20px;font-size:13.5px;color:#C9D7E4;cursor:pointer;border-left:3px solid transparent;user-select:none;}
+  .nav-item:hover{background:rgba(255,255,255,.06);color:#fff;}
+  .nav-item.active{background:rgba(255,255,255,.09);color:#fff;border-left-color:var(--amber);font-weight:600;}
+  .nav-icon{width:16px;text-align:center;font-size:14px;}
+  .main{flex:1;padding:26px 34px 60px 34px;max-width:1180px;}
+  .page-header{margin-bottom:22px;}
+  .page-title{font-size:21px;font-weight:700;margin:0 0 4px 0;}
+  .page-desc{font-size:13px;color:var(--ink-soft);margin:0;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:16px;}
+  .card-title{font-size:14px;font-weight:700;margin:0 0 12px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+  .stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;}
+  .stat-num{font-family:var(--mono);font-size:24px;font-weight:700;line-height:1;}
+  .stat-label{font-size:11.5px;color:var(--ink-soft);margin-top:6px;}
+  .stat.amber .stat-num{color:var(--amber);}
+  .stat.green .stat-num{color:var(--green);}
+  .stat.red .stat-num{color:var(--red);}
+  .stat.navy .stat-num{color:var(--navy-2);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;font-size:11px;color:var(--ink-soft);font-weight:600;border-bottom:1px solid var(--line);padding:8px 10px;}
+  td{padding:9px 10px;border-bottom:1px solid #EFECE0;vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  tr:hover td{background:#FAF9F4;}
+  .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;}
+  .badge.pending{background:var(--amber-bg);color:var(--amber);}
+  .badge.taken{background:var(--blue-bg);color:var(--slate);}
+  .badge.pass{background:var(--green-bg);color:var(--green);}
+  .badge.fail{background:var(--red-bg);color:var(--red);}
+  .btn{display:inline-flex;align-items:center;gap:6px;background:var(--navy-2);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;}
+  .btn:hover{background:var(--navy);}
+  .btn.secondary{background:#fff;color:var(--navy-2);border:1px solid var(--line);}
+  .btn.secondary:hover{background:#F1EFE6;}
+  .btn.danger{background:#fff;color:var(--red);border:1px solid #E7C6C1;}
+  .btn.danger:hover{background:var(--red-bg);}
+  .btn.small{padding:5px 10px;font-size:11.5px;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin:10px 0 5px 0;}
+  input[type=text],input[type=date],input[type=number],select,textarea{
+    width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:5px;font-size:13px;font-family:inherit;background:#fff;color:var(--ink);
+  }
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--slate);outline-offset:0;border-color:var(--slate);}
+  textarea{resize:vertical;min-height:50px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 16px;}
+  .form-actions{margin-top:16px;display:flex;gap:8px;}
+  .empty{padding:30px 10px;text-align:center;color:var(--ink-soft);font-size:13px;}
+  .muted{color:var(--ink-soft);font-size:12px;}
+  .row-flex{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .criteria-row{display:grid;grid-template-columns:1.4fr .8fr .6fr 1fr .6fr auto;gap:8px;align-items:center;margin-bottom:6px;}
+  .criteria-row input[type=text]{padding:6px 8px;font-size:12.5px;}
+  .chk{width:16px;height:16px;}
+  .filter-bar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+  .filter-bar select,.filter-bar input{width:auto;min-width:150px;}
+  .lot-header{display:flex;justify-content:space-between;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:8px;}
+  .lot-name{font-weight:700;font-size:14px;}
+  .lot-meta{font-size:11.5px;color:var(--ink-soft);margin-top:3px;}
+  .slot-list{margin-top:8px;}
+  .slot{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:5px;margin-bottom:6px;background:#FCFBF7;flex-wrap:wrap;gap:8px;}
+  .slot-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .progress-item{border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:10px;background:#FCFBF7;}
+  .progress-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
+  .progress-name{font-weight:700;font-size:14px;}
+  .progress-sub{font-size:11.5px;color:var(--ink-soft);margin-top:2px;}
+  .progress-nums{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);white-space:nowrap;}
+  .progress-bar{width:100%;height:9px;border-radius:5px;background:#EDEADD;overflow:hidden;}
+  .progress-fill{height:100%;background:var(--green);transition:width .25s ease;}
+  .progress-fill.warn{background:var(--amber);}
+  .freq-chip{font-family:var(--mono);font-size:11px;font-weight:700;background:var(--navy-2);color:#fff;border-radius:4px;padding:3px 7px;}
+  .close-x{cursor:pointer;color:var(--ink-soft);font-size:16px;background:none;border:none;}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(20,25,32,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow:auto;z-index:50;}
+  .modal{background:#fff;border-radius:8px;max-width:640px;width:100%;padding:22px 24px;}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+  .modal-title{font-size:15px;font-weight:700;}
+  .toast{position:fixed;bottom:20px;right:20px;background:var(--navy);color:#fff;padding:10px 16px;border-radius:6px;font-size:12.5px;z-index:60;max-width:340px;}
+  @media (max-width: 760px){
+    #app{flex-direction:column;}
+    .sidebar{width:100%;height:auto;position:static;flex-direction:row;overflow-x:auto;padding:10px;}
+    .brand{display:none;}
+    .nav-item{border-left:none;border-bottom:3px solid transparent;white-space:nowrap;padding:8px 12px;}
+    .nav-item.active{border-left-color:transparent;border-bottom-color:var(--amber);}
+    .main{padding:18px;}
+    .stat-grid{grid-template-columns:repeat(2,1fr);}
+    .grid2,.grid3{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main" id="main"></div>
+</div>
+<script>
+const STORAGE_KEY = 'qlvl_data_v1_opt';
+const TABS = [
+  {id:'dashboard', label:'Tổng quan', icon:'▤'},
+  {id:'materials', label:'Danh mục vật liệu', icon:'▣'},
+  {id:'lots', label:'Khối lượng nhập hàng', icon:'▦'},
+  {id:'sampling', label:'Thông tin lấy mẫu vật liệu', icon:'●'},
+  {id:'results', label:'Danh mục theo dõi lấy mẫu vật liệu', icon:'✓'},
+];
+
+let DB = null;
+let state = { tab:'dashboard', filters:{} };
+let activeModal = null;
+
+function uid(p){ return (p||'id')+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function esc(s){ return (s===undefined||s===null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function val(id){ return document.getElementById(id).value.trim(); }
+function freqLabel(n){ return 'Tần suất ' + String(n).padStart(2,'0'); }
+
+function defaultData(){
+  return {
+    materials:[
+      {id:uid('mat'), name:'Đất đắp nền đường', unit:'m³', freqQty:1000, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Độ chặt đầm nén K','Độ ẩm','Thành phần hạt']},
+      {id:uid('mat'), name:'Cấp phối đá dăm (móng đường)', unit:'m³', freqQty:200, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Thành phần hạt','CBR','Độ chặt K','Chỉ số dẻo']},
+      {id:uid('mat'), name:'Bê tông nhựa (BTN)', unit:'tấn', freqQty:200, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Độ ổn định Marshall','Độ rỗng dư','Hàm lượng nhựa','Chiều dày lớp']},
+      {id:uid('mat'), name:'Bê tông xi măng (mặt đường/vỉa hè)', unit:'m³', freqQty:100, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Cường độ nén R7','Cường độ nén R28','Độ sụt']},
+      {id:uid('mat'), name:'Cát xây dựng / cát đắp', unit:'m³', freqQty:300, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Mô đun độ lớn','Hàm lượng bùn, sét, tạp chất']},
+      {id:uid('mat'), name:'Đá dăm (base/subbase)', unit:'m³', freqQty:300, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Thành phần hạt','Độ hao mòn Los Angeles']},
+      {id:uid('mat'), name:'Cống bê tông ly tâm', unit:'ống', freqQty:100, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Cường độ nén','Kích thước hình học']},
+      {id:uid('mat'), name:'Gạch / đan lát vỉa hè', unit:'m²', freqQty:500, freqNote:'Đối chiếu TCVN / hồ sơ thiết kế dự án để điều chỉnh.', criteria:['Cường độ chịu uốn','Độ hút nước']},
+    ],
+    lots:[], samples:[], results:[]
+  };
+}
+
+/* ---------- storage (browser localStorage — works fully offline, on any device) ---------- */
+async function loadData(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      DB = JSON.parse(raw);
+      if(migrateSamplesIfNeeded()) saveData();
+    }
+    else { DB = defaultData(); saveData(); }
+  }catch(e){
+    console.error(e);
+    DB = defaultData();
+    try{ saveData(); }catch(e2){}
+  }
+}
+function saveData(){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }
+  catch(e){ console.error(e); showToast('Không lưu được dữ liệu (bộ nhớ trình duyệt có thể đã đầy).'); }
+}
+function persist(){ renderMain(); saveData(); }
+function showToast(msg){
+  const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),2200);
+}
+
+/* ---------- helpers ---------- */
+function materialById(id){ return DB.materials.find(m=>m.id===id); }
+function lotById(id){ return DB.lots.find(l=>l.id===id); }
+function sampleById(id){ return DB.samples.find(s=>s.id===id); }
+function sampleStatus(s){
+  if(s.status==='chua_lay') return {key:'pending', label:'Chưa lấy mẫu'};
+  if(s.soKQTN && s.soKQTN.trim()!=='') return {key:'pass', label:'Đã có KQTN'};
+  return {key:'taken', label:'Đã lấy mẫu — chưa có KQTN'};
+}
+function normSupplierKey(s){ return (s||'').trim().toLowerCase(); }
+
+/** Tần suất giờ thuộc về một NHÓM (vật liệu + nhà cung cấp), không thuộc riêng từng đợt nhập hàng — nhờ vậy nhiều đợt nhập cùng vật liệu/NCC sẽ dùng chung một dãy số tần suất liên tục 1,2,3... */
+function samplesForGroup(materialId, supplier){
+  const key = normSupplierKey(supplier);
+  return DB.samples.filter(s=>s.materialId===materialId && normSupplierKey(s.supplier)===key).sort((a,b)=>a.freqIndex-b.freqIndex);
+}
+/** Distinct (vật liệu + nhà cung cấp) pairs that have at least one delivery batch or sample, used to build the roll-up tables and the Sampling tab cards. */
+function materialSupplierGroupsInUse(){
+  const map = {};
+  DB.lots.forEach(l=>{
+    const supplier = (l.supplier||'').trim();
+    const key = l.materialId+'|'+normSupplierKey(supplier);
+    if(!map[key]) map[key] = { materialId:l.materialId, supplier };
+  });
+  DB.samples.forEach(s=>{
+    if(!s.materialId) return;
+    const supplier = (s.supplier||'').trim();
+    const key = s.materialId+'|'+normSupplierKey(supplier);
+    if(!map[key]) map[key] = { materialId:s.materialId, supplier };
+  });
+  return Object.values(map).sort((a,b)=>{
+    const ma = materialById(a.materialId), mb = materialById(b.materialId);
+    return (ma?ma.name:'').localeCompare(mb?mb.name:'') || a.supplier.localeCompare(b.supplier);
+  });
+}
+/** Cumulative quantity, required sample count, taken/remaining — summed across every đợt nhập hàng of one vật liệu + nhà cung cấp (matched case/whitespace-insensitively). */
+function aggregateForGroup(materialId, supplier){
+  const mat = materialById(materialId);
+  const key = normSupplierKey(supplier);
+  const lots = DB.lots.filter(l=>l.materialId===materialId && normSupplierKey(l.supplier)===key);
+  const totalQty = lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
+  const allSamples = samplesForGroup(materialId, supplier);
+  const taken = allSamples.filter(s=>s.status!=='chua_lay').length;
+  const requiredTotal = (mat && mat.freqQty>0) ? Math.max(1, Math.ceil(totalQty/mat.freqQty)) : null;
+  const remaining = requiredTotal===null ? null : Math.max(0, requiredTotal-taken);
+  return { mat, supplier, totalQty, requiredTotal, taken, remaining, lotsCount: lots.length };
+}
+/** How many tần suất a group should have right now: driven by quantity/định mức when known, otherwise at least one per đợt nhập hàng. */
+function requiredForGroup(materialId, supplier){
+  const agg = aggregateForGroup(materialId, supplier);
+  if(agg.requiredTotal!==null) return agg.requiredTotal;
+  return Math.max(1, agg.lotsCount);
+}
+/** Grows or shrinks a group's tần suất list to match requiredForGroup(), continuing the numbering (never restarting at 1 per đợt nhập hàng). Shrinking only ever removes tần suất that haven't been lấy mẫu yet, then renumbers the rest so there are no gaps. */
+function ensureSlotsForGroup(materialId, supplier){
+  const required = requiredForGroup(materialId, supplier);
+  const existing = samplesForGroup(materialId, supplier);
+  if(existing.length < required){
+    for(let i=existing.length+1;i<=required;i++){
+      DB.samples.push({id:uid('smp'), materialId, supplier, freqIndex:i, sampleCode:'', location:'', dateTaken:'', personTaken:'', quantity:'', soKQTN:'', phongThiNghiem:'', ngayKQTN:'', note:'', status:'chua_lay'});
+    }
+  } else if(existing.length > required){
+    const removable = existing.filter(s=>s.status==='chua_lay').sort((a,b)=>b.freqIndex-a.freqIndex);
+    const removeIds = removable.slice(0, existing.length-required).map(s=>s.id);
+    if(removeIds.length>0){
+      DB.samples = DB.samples.filter(s=>!removeIds.includes(s.id));
+      samplesForGroup(materialId, supplier).forEach((s,idx)=>{ s.freqIndex = idx+1; });
+    }
+  }
+}
+/** One-time migration: older saved data had tần suất attached to a single lotId. Converts those samples to the new materialId+supplier group model and renumbers them continuously, without deleting anything. */
+function migrateSamplesIfNeeded(){
+  let changed = false;
+  DB.samples.forEach(s=>{
+    if(s.materialId===undefined){
+      const lot = s.lotId? lotById(s.lotId) : null;
+      s.materialId = lot? lot.materialId : (DB.materials[0]?.id || '');
+      s.supplier = lot? (lot.supplier||'') : '';
+      changed = true;
+    }
+  });
+  if(changed){
+    const groups = {};
+    DB.samples.forEach(s=>{
+      const key = s.materialId+'|'+normSupplierKey(s.supplier);
+      if(!groups[key]) groups[key] = [];
+      groups[key].push(s);
+    });
+    Object.values(groups).forEach(arr=>{
+      arr.sort((a,b)=>(a.freqIndex||0)-(b.freqIndex||0));
+      arr.forEach((s,idx)=>{ s.freqIndex = idx+1; });
+    });
+  }
+  return changed;
+}
+
+/* ==========================================================
+   RENDER ARCHITECTURE — sidebar renders once, #main redraws
+   per tab, and modals live entirely outside the render cycle
+   so typing inside a form never gets interrupted mid-keystroke.
+   ========================================================== */
+function renderSidebar(){
+  const sidebar = document.getElementById('sidebar');
+  sidebar.innerHTML = `
+    <div class="brand">
+      <div class="brand-title">Quản lý lấy mẫu vật liệu</div>
+      <div class="brand-sub">Hạ tầng đường đô thị</div>
+    </div>
+    ${TABS.map(t=>`<div class="nav-item ${state.tab===t.id?'active':''}" data-tab="${t.id}"><span class="nav-icon">${t.icon}</span>${t.label}</div>`).join('')}
+  `;
+  sidebar.addEventListener('click', (e)=>{
+    const item = e.target.closest('.nav-item'); if(!item) return;
+    if(state.tab === item.dataset.tab) return;
+    state.tab = item.dataset.tab;
+    sidebar.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active', el.dataset.tab===state.tab));
+    renderMain();
+  });
+}
+function renderMain(){
+  const main = document.getElementById('main');
+  if(state.tab==='dashboard') renderDashboard(main);
+  else if(state.tab==='materials') renderMaterials(main);
+  else if(state.tab==='lots') renderLots(main);
+  else if(state.tab==='sampling') renderSampling(main);
+  else if(state.tab==='results') renderResults(main);
+}
+
+/* ---------- DASHBOARD ---------- */
+function renderDashboard(main){
+  const all = DB.samples;
+  const total = all.length;
+  const pending = all.filter(s=>s.status==='chua_lay').length;
+  const taken = all.filter(s=>{const st=sampleStatus(s); return st.key==='taken';}).length;
+  const hasKQTN = all.filter(s=>{const st=sampleStatus(s); return st.key==='pass';}).length;
+
+  const f = state.filters;
+  let rows = all.map(s=>{
+    const mat = s.materialId? materialById(s.materialId): null;
+    const st = sampleStatus(s);
+    return {s, mat, st};
+  });
+  if(f.materialId) rows = rows.filter(r=>r.s.materialId===f.materialId);
+  if(f.status) rows = rows.filter(r=>r.st.key===f.status);
+
+  const groupMap = {};
+  rows.forEach(r=>{
+    const key = r.mat? r.mat.id : '_khac';
+    if(!groupMap[key]) groupMap[key] = { mat:r.mat, items:[] };
+    groupMap[key].items.push(r);
+  });
+  const groups = Object.values(groupMap).sort((a,b)=> (a.mat?a.mat.name:'').localeCompare(b.mat?b.mat.name:''));
+
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Tổng quan theo dõi tần suất</h1>
+      <p class="page-desc">Trạng thái lấy mẫu và kết quả thí nghiệm trên toàn bộ các đợt nhập hàng.</p>
+    </div>
+    <div class="stat-grid">
+      <div class="stat navy"><div class="stat-num">${total}</div><div class="stat-label">Tổng số tần suất</div></div>
+      <div class="stat amber"><div class="stat-num">${pending}</div><div class="stat-label">Chưa lấy mẫu</div></div>
+      <div class="stat" style="border-color:var(--line)"><div class="stat-num" style="color:var(--slate)">${taken}</div><div class="stat-label">Đã lấy mẫu — chưa KQTN</div></div>
+      <div class="stat green"><div class="stat-num">${hasKQTN}</div><div class="stat-label">Đã có KQTN</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Bảng theo dõi chi tiết</div>
+      <div class="filter-bar">
+        <select id="f-material">
+          <option value="">Tất cả vật liệu</option>
+          ${DB.materials.map(m=>`<option value="${m.id}" ${f.materialId===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}
+        </select>
+        <select id="f-status">
+          <option value="">Tất cả trạng thái</option>
+          <option value="pending" ${f.status==='pending'?'selected':''}>Chưa lấy mẫu</option>
+          <option value="taken" ${f.status==='taken'?'selected':''}>Đã lấy mẫu — chưa KQTN</option>
+          <option value="pass" ${f.status==='pass'?'selected':''}>Đã có KQTN</option>
+        </select>
+      </div>
+    </div>
+    ${groups.length===0? `<div class="card"><div class="empty">Chưa có dữ liệu phù hợp. Vào mục "Khối lượng nhập hàng" để tạo đợt nhập hàng.</div></div>` :
+      groups.map(g=>{
+        const items = g.items.slice().sort((a,b)=> (a.s.supplier||'').localeCompare(b.s.supplier||'') || a.s.freqIndex-b.s.freqIndex);
+        return `
+        <div class="card">
+          <div class="card-title">${g.mat?esc(g.mat.name):'Vật liệu khác'} <span class="muted" style="font-weight:400;">${items.length} tần suất</span></div>
+          <table>
+            <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
+            <tbody>
+              ${items.map(r=>{
+                const daNghiemThu = !!(r.s.sampleCode && r.s.sampleCode.trim()!=='');
+                return `
+                <tr>
+                  <td><span class="freq-chip">${freqLabel(r.s.freqIndex)}</span></td>
+                  <td>${esc(r.s.supplier)||'—'}</td>
+                  <td class="mono">${esc(r.s.quantity)||'—'}</td>
+                  <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
+                  <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
+                  <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
+                  <td>${esc(r.s.dateTaken)||'—'}</td>
+                  <td>${esc(r.s.ngayKQTN)||'—'}</td>
+                  <td><span class="badge ${r.st.key==='pending'?'pending':r.st.key==='taken'?'taken':r.st.key}">${r.st.label}</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+      }).join('')
+    }
+  `;
+  main.querySelector('#f-material')?.addEventListener('change',e=>{state.filters.materialId=e.target.value; renderDashboard(main);});
+  main.querySelector('#f-status')?.addEventListener('change',e=>{state.filters.status=e.target.value; renderDashboard(main);});
+}
+
+/* ---------- MATERIALS ---------- */
+function renderMaterials(main){
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Danh mục vật liệu</h1>
+      <p class="page-desc">Định mức khối lượng ứng với 1 mẫu — dùng để tự động tính số tần suất lấy mẫu theo khối lượng nhập về. Đối chiếu, chỉnh sửa theo hồ sơ thiết kế / tiêu chuẩn áp dụng cho dự án của bạn.</p>
+    </div>
+    <div class="card">
+      <div class="card-title">Danh sách vật liệu <button class="btn small" id="mat-add">+ Thêm vật liệu</button></div>
+      ${DB.materials.length===0? `<div class="empty">Chưa có vật liệu nào.</div>` : `
+      <table>
+        <thead><tr><th>Tên vật liệu</th><th>Đơn vị</th><th>Định mức / mẫu</th><th>Chỉ tiêu thí nghiệm</th><th></th></tr></thead>
+        <tbody>
+        ${DB.materials.map(m=>`
+          <tr>
+            <td>${esc(m.name)}</td>
+            <td>${esc(m.unit)}</td>
+            <td class="mono">${m.freqQty>0? `${m.freqQty} ${esc(m.unit)}/mẫu` : '—'}</td>
+            <td class="muted">${m.criteria.map(esc).join(', ')}</td>
+            <td class="row-flex">
+              <button class="btn secondary small" data-edit="${m.id}">Sửa</button>
+              <button class="btn danger small" data-del="${m.id}">Xoá</button>
+            </td>
+          </tr>
+        `).join('')}
+        </tbody>
+      </table>`}
+    </div>
+  `;
+  main.querySelector('#mat-add').addEventListener('click', ()=> openMaterialModal(null));
+  main.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>openMaterialModal(b.dataset.edit)));
+  main.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{
+    const id=b.dataset.del;
+    const dependentLots = DB.lots.filter(l=>l.materialId===id);
+    if(dependentLots.length===0){
+      if(confirm('Xoá vật liệu này?')){ DB.materials = DB.materials.filter(m=>m.id!==id); persist(); }
+      return;
+    }
+    const ok = confirm(`Vật liệu này đang được dùng trong ${dependentLots.length} đợt nhập hàng. Xoá vật liệu sẽ xoá luôn các đợt nhập hàng, tần suất và kết quả thí nghiệm liên quan. Bạn có chắc chắn muốn xoá?`);
+    if(!ok) return;
+    const lotIds = dependentLots.map(l=>l.id);
+    const smpIds = DB.samples.filter(s=>s.materialId===id).map(s=>s.id);
+    DB.lots = DB.lots.filter(l=>l.materialId!==id);
+    DB.samples = DB.samples.filter(s=>s.materialId!==id);
+    DB.results = DB.results.filter(r=>!smpIds.includes(r.sampleId));
+    DB.materials = DB.materials.filter(m=>m.id!==id);
+    persist();
+    showToast('Đã xoá vật liệu và toàn bộ dữ liệu liên quan.');
+  }));
+}
+function openMaterialModal(id){
+  const m = id? materialById(id) : {id:uid('mat'), name:'', unit:'', freqQty:0, freqNote:'', criteria:['']};
+  openModal({
+    title: id? 'Sửa vật liệu' : 'Thêm vật liệu',
+    focusId: 'm-name',
+    body: `
+      <label>Tên vật liệu</label><input type="text" id="m-name" value="${esc(m.name)}" placeholder="VD: Cấp phối đá dăm móng đường">
+      <div class="grid3">
+        <div><label>Đơn vị tính</label><input type="text" id="m-unit" value="${esc(m.unit)}" placeholder="m³, tấn, m², ống..."></div>
+        <div><label>Định mức / 1 mẫu</label><input type="number" min="0" step="any" id="m-freqqty" value="${m.freqQty}" placeholder="VD: 200"></div>
+        <div><label>&nbsp;</label><div class="muted" style="padding-top:8px;">Khối lượng ứng với 1 mẫu</div></div>
+      </div>
+      <label>Ghi chú định mức (tuỳ chọn)</label>
+      <input type="text" id="m-freqnote" value="${esc(m.freqNote)}" placeholder="VD: theo TCVN..., cần đối chiếu hồ sơ dự án">
+      <label>Chỉ tiêu thí nghiệm (mỗi dòng một chỉ tiêu)</label>
+      <textarea id="m-criteria" rows="4">${esc(m.criteria.join('\\n'))}</textarea>
+    `,
+    onSave: ()=>{
+      const name = document.getElementById('m-name').value.trim();
+      if(!name){ showToast('Vui lòng nhập tên vật liệu'); return false; }
+      m.name = name;
+      m.unit = val('m-unit');
+      m.freqQty = parseFloat(document.getElementById('m-freqqty').value) || 0;
+      m.freqNote = val('m-freqnote');
+      m.criteria = document.getElementById('m-criteria').value.split('\\n').map(x=>x.trim()).filter(Boolean);
+      if(!id) DB.materials.push(m);
+      materialSupplierGroupsInUse().filter(g=>g.materialId===m.id).forEach(g=>ensureSlotsForGroup(g.materialId, g.supplier));
+      persist();
+      return true;
+    }
+  });
+}
+
+/* ---------- LOTS ---------- */
+function distinctSuppliers(){
+  return [...new Set(DB.lots.map(l=>l.supplier).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+}
+function renderLots(main){
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier));
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Khối lượng nhập hàng về</h1>
+      <p class="page-desc">Mỗi đợt ứng với một lần nhập vật liệu về công trường. Số tần suất lấy mẫu được tự động tính theo định mức của vật liệu và khối lượng nhập về.</p>
+    </div>
+    ${aggs.length>0? `
+    <div class="card">
+      <div class="card-title">Tổng hợp khối lượng theo vật liệu &amp; nhà cung cấp</div>
+      <table>
+        <thead><tr><th>Vật liệu</th><th>Nhà cung cấp</th><th>Số đợt nhập</th><th>Tổng khối lượng đã về</th><th>Định mức / mẫu</th><th>Tổng tần suất cần lấy</th></tr></thead>
+        <tbody>
+          ${aggs.map(a=>`
+            <tr>
+              <td>${esc(a.mat.name)}</td>
+              <td>${esc(a.supplier)||'—'}</td>
+              <td class="mono">${a.lotsCount}</td>
+              <td class="mono">${a.totalQty} ${esc(a.mat.unit)}</td>
+              <td class="mono">${a.mat.freqQty>0? `${a.mat.freqQty} ${esc(a.mat.unit)}/mẫu` : '—'}</td>
+              <td class="mono">${a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-title">Danh sách các đợt nhập hàng <button class="btn small" id="lot-add">+ Thêm đợt nhập hàng</button></div>
+      ${DB.lots.length===0? `<div class="empty">Chưa có đợt nhập hàng nào. ${DB.materials.length===0?'Hãy thêm vật liệu trước.':''}</div>` : DB.lots.map(l=>{
+        const mat = materialById(l.materialId);
+        return `
+        <div class="lot-header">
+          <div>
+            <div class="lot-name">${mat?esc(mat.name):'—'} — ${esc(l.startDate)||'chưa có ngày nhập'}</div>
+            <div class="lot-meta">Khối lượng: ${l.quantity||0} ${mat?esc(mat.unit):''} · Nhà cung cấp: ${esc(l.supplier)||'—'} · Phân khu: ${esc(l.location)||'—'} · Ngày nhập: ${esc(l.startDate)||'—'}</div>
+            <div class="lot-meta">Tần suất lấy mẫu được tính chung cho cả nhóm "${mat?esc(mat.name):''} — ${esc(l.supplier)||'chưa rõ NCC'}" — xem tiến độ ở bảng tổng hợp phía trên hoặc tab "Thông tin lấy mẫu vật liệu".</div>
+          </div>
+          <div class="row-flex">
+            <button class="btn secondary small" data-editlot="${l.id}">Sửa</button>
+            <button class="btn danger small" data-dellot="${l.id}">Xoá</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+  main.querySelector('#lot-add').addEventListener('click', ()=>{
+    if(DB.materials.length===0){ showToast('Vui lòng thêm vật liệu trước'); return; }
+    openLotModal(null);
+  });
+  main.querySelectorAll('[data-editlot]').forEach(b=>b.addEventListener('click',()=>openLotModal(b.dataset.editlot)));
+  main.querySelectorAll('[data-dellot]').forEach(b=>b.addEventListener('click',()=>{
+    const id=b.dataset.dellot;
+    const lot = lotById(id);
+    if(confirm('Xoá đợt nhập hàng này? Khối lượng của nhóm vật liệu + nhà cung cấp tương ứng sẽ giảm xuống — nếu nhờ đó tần suất cần lấy giảm theo, các tần suất CHƯA lấy mẫu dư ra sẽ được rút bớt (tần suất đã lấy mẫu luôn được giữ lại).')){
+      DB.lots = DB.lots.filter(l=>l.id!==id);
+      if(lot) ensureSlotsForGroup(lot.materialId, lot.supplier);
+      persist();
+      showToast('Đã xoá đợt nhập hàng.');
+    }
+  }));
+}
+function openLotModal(id){
+  const l = id? lotById(id) : {id:uid('lot'), materialId:DB.materials[0]?.id||'', name:'', supplier:'', location:'', quantity:'', freqCount:1, startDate:''};
+  openModal({
+    title: id? 'Sửa đợt nhập hàng' : 'Thêm đợt nhập hàng',
+    focusId: 'l-qty',
+    body: `
+      <div class="grid2">
+        <div><label>Vật liệu</label>
+          <select id="l-mat">${DB.materials.map(m=>`<option value="${m.id}" ${l.materialId===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select>
+        </div>
+        <div><label>Nhà cung cấp</label><input type="text" id="l-supplier" list="dl-suppliers" value="${esc(l.supplier)}" placeholder="VD: Công ty CP VLXD ABC"></div>
+      </div>
+      <datalist id="dl-suppliers">${distinctSuppliers().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
+      <div class="grid2">
+        <div><label>Vị trí nhập hàng (phân khu)</label><input type="text" id="l-loc" value="${esc(l.location)}" placeholder="VD: Phân khu A / Km0+000 - Km0+500"></div>
+        <div><label>Ngày nhập hàng về</label><input type="date" id="l-date" value="${esc(l.startDate)}"></div>
+      </div>
+      <label>Khối lượng</label>
+      <input type="number" min="0" step="any" id="l-qty" value="${l.quantity}" placeholder="VD: 1200">
+      <div class="muted" id="l-freq-preview" style="margin-top:10px;padding:8px 10px;background:#FBFAF5;border:1px solid var(--line);border-radius:5px;"></div>
+    `,
+    afterRender: (modalEl)=>{
+      const matSel = modalEl.querySelector('#l-mat');
+      const qtyInput = modalEl.querySelector('#l-qty');
+      const supplierInput = modalEl.querySelector('#l-supplier');
+      const preview = modalEl.querySelector('#l-freq-preview');
+      function updatePreview(){
+        const materialId = matSel.value;
+        const supplier = supplierInput.value;
+        const mat = materialById(materialId);
+        const qty = parseFloat(qtyInput.value) || 0;
+        const key = normSupplierKey(supplier);
+        const otherLots = DB.lots.filter(x=>x.materialId===materialId && normSupplierKey(x.supplier)===key && x.id!==l.id);
+        const existingTotal = otherLots.reduce((a,x)=>a+(parseFloat(x.quantity)||0),0);
+        const newTotal = existingTotal + qty;
+        const existingCount = samplesForGroup(materialId, supplier).length;
+        let required;
+        if(mat && mat.freqQty>0) required = Math.max(1, Math.ceil(newTotal/mat.freqQty));
+        else required = Math.max(1, otherLots.length+1);
+        const diff = required - existingCount;
+        preview.innerHTML = `Nhóm <b>"${mat?esc(mat.name):''} — ${esc(supplier)||'chưa rõ NCC'}"</b> sau khi lưu: tổng khối lượng <b>${newTotal}</b> ${mat?esc(mat.unit):''} → cần <b>${required}</b> tần suất`
+          + (mat&&mat.freqQty>0? ` (định mức ${mat.freqQty} ${esc(mat.unit)}/mẫu)` : ' (vật liệu chưa có định mức, tạm tính 1 tần suất/đợt)')
+          + `. Hiện nhóm đang có ${existingCount} tần suất — `
+          + (diff>0? `sẽ <b>thêm ${diff}</b> tần suất mới, đánh số tiếp theo.` : diff<0? `dư ${-diff} tần suất (chỉ rút bớt các tần suất chưa lấy mẫu).` : `đã đủ, không đổi.`);
+      }
+      matSel.addEventListener('change', updatePreview);
+      qtyInput.addEventListener('input', updatePreview);
+      supplierInput.addEventListener('input', updatePreview);
+      updatePreview();
+    },
+    onSave: ()=>{
+      const materialId = document.getElementById('l-mat').value;
+      const quantity = parseFloat(document.getElementById('l-qty').value) || 0;
+      if(quantity<=0){ showToast('Vui lòng nhập khối lượng lớn hơn 0'); return false; }
+      const mat = materialById(materialId);
+      const oldMaterialId = l.materialId, oldSupplier = l.supplier;
+      l.materialId = materialId;
+      l.name = `${mat?mat.name:'Vật liệu'} — ${document.getElementById('l-date').value || 'chưa có ngày'}`;
+      l.supplier = val('l-supplier');
+      l.location = val('l-loc');
+      l.quantity = quantity;
+      l.startDate = document.getElementById('l-date').value;
+      if(!id) DB.lots.push(l);
+      // Recompute slots for the (possibly new) group this lot now belongs to...
+      ensureSlotsForGroup(l.materialId, l.supplier);
+      // ...and also for its old group, in case editing moved it to a different vật liệu/nhà cung cấp.
+      if(id && (oldMaterialId!==l.materialId || normSupplierKey(oldSupplier)!==normSupplierKey(l.supplier))){
+        ensureSlotsForGroup(oldMaterialId, oldSupplier);
+      }
+      persist();
+      return true;
+    }
+  });
+}
+
+/* ---------- SAMPLING ---------- */
+function renderSampling(main){
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier));
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Thông tin lấy mẫu vật liệu</h1>
+      <p class="page-desc">Tần suất được gộp chung và đánh số liên tục theo từng nhóm vật liệu + nhà cung cấp, không tách riêng theo từng đợt nhập hàng.</p>
+    </div>
+    ${aggs.length>0? `
+    <div class="card">
+      <div class="card-title">Tổng hợp tiến độ lấy mẫu theo vật liệu &amp; nhà cung cấp <span class="muted" style="font-weight:400;">Tính trên tổng khối lượng của mọi đợt nhập hàng cộng lại</span></div>
+      <table>
+        <thead><tr><th>Vật liệu</th><th>Nhà cung cấp</th><th>Tổng khối lượng đã về</th><th>Tổng tần suất cần lấy</th><th>Đã lấy</th><th>Còn lại chưa lấy</th></tr></thead>
+        <tbody>
+          ${aggs.map(a=>`
+            <tr>
+              <td>${esc(a.mat.name)}</td>
+              <td>${esc(a.supplier)||'—'}</td>
+              <td class="mono">${a.totalQty} ${esc(a.mat.unit)}</td>
+              <td class="mono">${a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
+              <td class="mono">${a.taken}</td>
+              <td>${a.remaining===null? '—' : a.remaining>0? `<span class="badge pending">Còn ${a.remaining}</span>` : `<span class="badge pass">Đã đủ</span>`}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+    ${aggs.length===0? `<div class="card"><div class="empty">Chưa có đợt nhập hàng nào. Vào mục "Khối lượng nhập hàng" để tạo.</div></div>` :
+      aggs.map(a=>{
+        const samples = samplesForGroup(a.mat.id, a.supplier);
+        return `
+        <div class="card">
+          <div class="card-title">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</span></div>
+          ${samples.length===0? `<div class="empty">Chưa có tần suất nào.</div>` : `
+          <table>
+            <thead><tr><th>Tần suất</th><th>Số BBNT</th><th>Khối lượng</th><th>Vị trí</th><th>Người lấy mẫu</th><th>Ngày lấy mẫu</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày có KQTN</th><th>Trạng thái</th><th></th></tr></thead>
+            <tbody>
+            ${samples.map(s=>{
+              const st = sampleStatus(s);
+              return `
+              <tr>
+                <td><span class="freq-chip">${freqLabel(s.freqIndex)}</span></td>
+                <td class="mono">${esc(s.sampleCode)||'—'}</td>
+                <td class="mono">${esc(s.quantity)||'—'}</td>
+                <td>${esc(s.location)||'—'}</td>
+                <td>${esc(s.personTaken)||'—'}</td>
+                <td>${esc(s.dateTaken)||'—'}</td>
+                <td class="mono">${esc(s.soKQTN)||'—'}</td>
+                <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
+                <td>${esc(s.ngayKQTN)||'—'}</td>
+                <td><span class="badge ${st.key==='pending'?'pending':st.key==='taken'?'taken':st.key}">${st.label}</span></td>
+                <td class="row-flex">
+                  <button class="btn secondary small" data-samp="${s.id}">${s.status==='chua_lay'?'Nhập':'Sửa'}</button>
+                  <button class="btn danger small" data-delsamp="${s.id}">Xoá</button>
+                </td>
+              </tr>`;
+            }).join('')}
+            </tbody>
+          </table>`}
+        </div>`;
+      }).join('')
+    }
+  `;
+  main.querySelectorAll('[data-samp]').forEach(b=>b.addEventListener('click',()=>openSampleModal(b.dataset.samp)));
+  main.querySelectorAll('[data-delsamp]').forEach(b=>b.addEventListener('click',()=>deleteSample(b.dataset.delsamp)));
+}
+function deleteSample(sampleId){
+  const s = sampleById(sampleId);
+  if(!s) return;
+  if(!confirm('Xoá tần suất lấy mẫu này? Kết quả thí nghiệm liên quan (nếu có) cũng sẽ bị xoá.')) return;
+  const materialId = s.materialId, supplier = s.supplier;
+  DB.results = DB.results.filter(r=>r.sampleId!==sampleId);
+  DB.samples = DB.samples.filter(x=>x.id!==sampleId);
+  samplesForGroup(materialId, supplier).forEach((r,idx)=>{ r.freqIndex = idx+1; });
+  persist();
+  showToast('Đã xoá.');
+}
+function openSampleModal(id){
+  const s = sampleById(id);
+  const mat = materialById(s.materialId);
+  openModal({
+    title: `Lấy mẫu — ${mat?mat.name:''} — ${esc(s.supplier)||'Chưa rõ NCC'} — ${freqLabel(s.freqIndex)}`,
+    focusId: 's-code',
+    body: `
+      <div class="grid2">
+        <div><label>Số BBNT</label><input type="text" id="s-code" value="${esc(s.sampleCode)}" placeholder="VD: BBNT-01"></div>
+        <div><label>Khối lượng đại diện</label><input type="text" id="s-qty" value="${esc(s.quantity)}" placeholder="VD: 500 m³"></div>
+      </div>
+      <div class="grid2">
+        <div><label>Ngày lấy mẫu</label><input type="date" id="s-date" value="${esc(s.dateTaken)}"></div>
+        <div><label>Người lấy mẫu</label><input type="text" id="s-person" value="${esc(s.personTaken)}"></div>
+      </div>
+      <label>Vị trí lấy mẫu cụ thể</label>
+      <input type="text" id="s-loc" value="${esc(s.location)}" placeholder="VD: Lý trình Km0+120, tim tuyến">
+      <div class="grid2">
+        <div><label>Số KQTN</label><input type="text" id="s-sokqtn" value="${esc(s.soKQTN)}" placeholder="VD: KQTN-001"></div>
+        <div><label>Phòng thí nghiệm</label><input type="text" id="s-lab" value="${esc(s.phongThiNghiem)}" placeholder="Tên phòng LAS-XD..."></div>
+      </div>
+      <div class="grid2">
+        <div><label>Ngày có KQTN</label><input type="date" id="s-ngaykqtn" value="${esc(s.ngayKQTN)}"></div>
+      </div>
+      <label>Ghi chú</label>
+      <textarea id="s-note">${esc(s.note)}</textarea>
+    `,
+    onSave: ()=>{
+      s.sampleCode = val('s-code');
+      s.quantity = val('s-qty');
+      s.dateTaken = document.getElementById('s-date').value;
+      s.personTaken = val('s-person');
+      s.location = val('s-loc');
+      s.soKQTN = val('s-sokqtn');
+      s.phongThiNghiem = val('s-lab');
+      s.ngayKQTN = document.getElementById('s-ngaykqtn').value;
+      s.note = val('s-note');
+      if(!s.dateTaken){ showToast('Vui lòng nhập ngày lấy mẫu'); return false; }
+      s.status = 'da_lay';
+      persist();
+      return true;
+    }
+  });
+}
+
+/* ---------- DANH MỤC THEO DÕI (chỉ đọc, lấy dữ liệu từ phần Lấy mẫu) ---------- */
+function renderResults(main){
+  const takenSamples = DB.samples.filter(s=>s.status!=='chua_lay');
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier));
+  const groupMap = {};
+  takenSamples.forEach(s=>{
+    const mat = s.materialId? materialById(s.materialId) : null;
+    const key = mat? mat.id : '_khac';
+    if(!groupMap[key]) groupMap[key] = { mat, items: [] };
+    groupMap[key].items.push(s);
+  });
+  const groups = Object.values(groupMap).sort((a,b)=> (a.mat?a.mat.name:'').localeCompare(b.mat?b.mat.name:''));
+
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Danh mục theo dõi lấy mẫu vật liệu</h1>
+      <p class="page-desc">Bảng này lấy dữ liệu trực tiếp từ tab "Thông tin lấy mẫu vật liệu" — không cần nhập lại. Để cập nhật Số BBNT, Số KQTN, Phòng thí nghiệm hay Ngày có KQTN, hãy sửa ở tab đó.</p>
+    </div>
+    ${aggs.length>0? `
+    <div class="card">
+      <div class="card-title">Tiến độ lấy mẫu theo vật liệu &amp; nhà cung cấp</div>
+      ${aggs.map(a=>{
+        const pct = a.requiredTotal? Math.min(100, Math.round(a.taken/a.requiredTotal*100)) : (a.taken>0?100:0);
+        const isFull = a.requiredTotal!==null && a.remaining===0;
+        return `
+        <div class="progress-item">
+          <div class="progress-top">
+            <div>
+              <div class="progress-name">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— NCC: ${esc(a.supplier)||'Chưa rõ'}</span></div>
+              <div class="progress-sub">Tổng khối lượng đã về: ${a.totalQty} ${esc(a.mat.unit)}${a.mat.freqQty>0? ` · Định mức ${a.mat.freqQty} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
+            </div>
+            <div class="progress-nums">
+              ${a.requiredTotal===null? 'Chưa tính được tần suất' : `Đã lấy ${a.taken}/${a.requiredTotal} tần suất`}
+              ${a.remaining>0? ` · <span style="color:var(--amber);font-weight:700;">còn ${a.remaining}</span>` : (a.requiredTotal!==null? ` · <span style="color:var(--green);font-weight:700;">đã đủ</span>` : '')}
+            </div>
+          </div>
+          <div class="progress-bar"><div class="progress-fill ${isFull?'':'warn'}" style="width:${pct}%;"></div></div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+    ${takenSamples.length===0? `<div class="card"><div class="empty">Chưa có mẫu nào được lấy. Vào mục "Thông tin lấy mẫu vật liệu" trước.</div></div>` :
+      groups.map(g=>{
+        const items = g.items.slice().sort((a,b)=> (a.supplier||'').localeCompare(b.supplier||'') || a.freqIndex-b.freqIndex);
+        const hasKQTN = items.filter(s=>sampleStatus(s).key==='pass').length;
+        return `
+        <div class="card">
+          <div class="card-title">${g.mat?esc(g.mat.name):'Vật liệu khác'} <span class="muted" style="font-weight:400;">${items.length} tần suất · ${hasKQTN} đã có KQTN</span></div>
+          <table>
+            <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái KQTN</th></tr></thead>
+            <tbody>
+            ${items.map(s=>{
+              const st = sampleStatus(s);
+              const daNghiemThu = !!(s.sampleCode && s.sampleCode.trim()!=='');
+              return `
+              <tr>
+                <td><span class="freq-chip">${freqLabel(s.freqIndex)}</span></td>
+                <td>${esc(s.supplier)||'—'}</td>
+                <td class="mono">${esc(s.quantity)||'—'}</td>
+                <td>${daNghiemThu? `<span class="mono">${esc(s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
+                <td class="mono">${esc(s.soKQTN)||'—'}</td>
+                <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
+                <td>${esc(s.dateTaken)||'—'}</td>
+                <td>${esc(s.ngayKQTN)||'—'}</td>
+                <td><span class="badge ${st.key==='taken'?'taken':st.key}">${st.label}</span></td>
+              </tr>`;
+            }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+      }).join('')
+    }
+  `;
+}
+
+/* ==========================================================
+   MODAL — lives entirely outside the tab render cycle so
+   typing inside it is never interrupted by a background redraw.
+   ========================================================== */
+function openModal(config){
+  closeModal();
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" style="${config.wide?'max-width:760px':''}">
+      <div class="modal-head">
+        <div class="modal-title">${config.title}</div>
+        <button class="close-x" id="modal-close">✕</button>
+      </div>
+      <div id="modal-body">${config.body}</div>
+      <div class="form-actions">
+        <button class="btn" id="modal-save">Lưu</button>
+        <button class="btn secondary" id="modal-cancel">Huỷ</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  const modalEl = backdrop.querySelector('.modal');
+  const doClose = ()=>closeModal();
+  const doSave = ()=>{ const ok = config.onSave(); if(ok!==false) closeModal(); };
+  backdrop.querySelector('#modal-close').addEventListener('click', doClose);
+  backdrop.querySelector('#modal-cancel').addEventListener('click', doClose);
+  backdrop.querySelector('#modal-save').addEventListener('click', doSave);
+  backdrop.addEventListener('click', (e)=>{ if(e.target===backdrop) doClose(); });
+  backdrop.addEventListener('keydown', (e)=>{
+    if(e.key==='Escape') doClose();
+    if(e.key==='Enter' && (e.target.tagName==='INPUT' || e.target.tagName==='SELECT')){ e.preventDefault(); doSave(); }
+  });
+  activeModal = { backdrop };
+  if(config.afterRender) config.afterRender(modalEl);
+  if(config.focusId){
+    const el = document.getElementById(config.focusId);
+    if(el){ el.focus(); if(el.select) el.select(); }
+  }
+}
+function closeModal(){
+  if(activeModal && activeModal.backdrop){ activeModal.backdrop.remove(); }
+  activeModal = null;
+}
+
+/* ---------- init ---------- */
+(async function init(){
+  document.getElementById('main').innerHTML = `<div style="padding:60px 20px;text-align:center;color:#5B6470;">Đang tải dữ liệu…</div>`;
+  renderSidebar();
+  await loadData();
+  renderMain();
+})();
+</script>
+</body>
+</html>

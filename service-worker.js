@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qlvl-cache-v1';
+const CACHE_NAME = 'qlvl-cache-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -23,9 +23,27 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache-first, falling back to network, so the app opens instantly and works offline.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  const isPage = event.request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname.endsWith('/');
+
+  if (isPage) {
+    // Network-first for the app page itself, so updates you upload to GitHub
+    // always show up immediately. Falls back to the cached copy only when offline.
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Cache-first for static assets (icons, manifest) — these rarely change and load instantly.
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -37,3 +55,4 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+

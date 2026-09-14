@@ -121,6 +121,7 @@ const TABS = [
   {id:'lots', label:'Khối lượng nhập hàng', icon:'▦'},
   {id:'sampling', label:'Thông tin lấy mẫu vật liệu', icon:'●'},
   {id:'results', label:'Danh mục theo dõi lấy mẫu vật liệu', icon:'✓'},
+  {id:'excel', label:'Nhập từ Excel', icon:'⇅'},
 ];
 
 let DB = null;
@@ -298,6 +299,7 @@ function renderMain(){
   else if(state.tab==='lots') renderLots(main);
   else if(state.tab==='sampling') renderSampling(main);
   else if(state.tab==='results') renderResults(main);
+  else if(state.tab==='excel') renderExcel(main);
 }
 
 /* ---------- DASHBOARD ---------- */
@@ -803,6 +805,229 @@ function renderResults(main){
 }
 
 /* ==========================================================
+   EXCEL IMPORT
+   One flat sheet, one row per tần suất (sampling event) — optionally
+   sampled). Headers are matched loosely (case/diacritic/spacing
+   insensitive) so the exact template isn't mandatory. Import is
+   additive: it matches existing lots/samples where it reasonably
+   can and otherwise adds new ones — it never deletes anything.
+   ========================================================== */
+const XLSX_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+];
+let xlsxStatus = 'loading'; // 'loading' | 'ready' | 'failed'
+let xlsxStatusListeners = [];
+function onXlsxStatusChange(fn){ xlsxStatusListeners.push(fn); }
+function setXlsxStatus(s){ xlsxStatus = s; xlsxStatusListeners.forEach(fn=>fn(s)); }
+function loadXlsxLib(sourceIndex){
+  sourceIndex = sourceIndex || 0;
+  if(typeof XLSX !== 'undefined'){ setXlsxStatus('ready'); return; }
+  if(sourceIndex >= XLSX_SOURCES.length){ setXlsxStatus('failed'); return; }
+  const s = document.createElement('script');
+  s.src = XLSX_SOURCES[sourceIndex];
+  s.onload = ()=>{ if(typeof XLSX !== 'undefined') setXlsxStatus('ready'); else loadXlsxLib(sourceIndex+1); };
+  s.onerror = ()=> loadXlsxLib(sourceIndex+1);
+  document.head.appendChild(s);
+}
+loadXlsxLib();
+
+const EXCEL_TEMPLATE_HEADERS = ['Vật liệu','Nhà cung cấp','Khối lượng','Ngày nhập','Vị trí/phân khu','Số BBNT','Người lấy mẫu','Ngày lấy mẫu','Số KQTN','Phòng thí nghiệm','Ngày có KQTN'];
+const EXCEL_HEADER_MAP = {
+  vatLieu:['vatlieu'], nhaCungCap:['nhacungcap','ncc'], khoiLuong:['khoiluong'],
+  ngayNhap:['ngaynhap'], viTri:['vitriphankhu','vitri','phankhu'],
+  soBBNT:['sobbnt','bbnt','mamau'], nguoiLayMau:['nguoilaymau'], ngayLayMau:['ngaylaymau'],
+  soKQTN:['sokqtn'], phongThiNghiem:['phongthinghiem'], ngayCoKQTN:['ngaycokqtn','ngaycoketqua']
+};
+function normKey(h){ return stripDiacritics(String(h||'')).toLowerCase().replace(/[^a-z0-9]/g,''); }
+function stripDiacritics(str){ return str.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D'); }
+function mapExcelHeaders(headers){
+  const norm = headers.map(normKey);
+  const out = {};
+  Object.keys(EXCEL_HEADER_MAP).forEach(field=>{
+    let idx=-1;
+    for(const c of EXCEL_HEADER_MAP[field]){ idx = norm.indexOf(c); if(idx!==-1) break; }
+    out[field]=idx;
+  });
+  return out;
+}
+function excelToISODate(v){
+  if(v===undefined||v===null||v==='') return '';
+  if(v instanceof Date && !isNaN(v)){
+    const y=v.getFullYear(), m=String(v.getMonth()+1).padStart(2,'0'), d=String(v.getDate()).padStart(2,'0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(v).trim();
+  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){ const [y,m,d]=s.split('-'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; }
+  if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){ const [d,m,y]=s.split('/'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; }
+  return s;
+}
+function downloadExcelTemplate(){
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([
+    EXCEL_TEMPLATE_HEADERS,
+    ['Cấp phối đá dăm (móng đường)','Công ty CP VLXD ABC',250,'2026-09-01','Phân khu A','BBNT-01','Trần Văn B','2026-09-02','KQTN-01','LAS-XD 123','2026-09-06'],
+    ['Cấp phối đá dăm (móng đường)','Công ty CP VLXD ABC',200,'2026-09-10','Phân khu A','','','','','','']
+  ]);
+  XLSX.utils.book_append_sheet(wb, ws, 'DuLieu');
+  XLSX.writeFile(wb, 'mau_nhap_du_lieu.xlsx');
+}
+function findOrCreateMaterialByName(name){
+  name = (name||'').toString().trim();
+  if(!name) return null;
+  let mat = DB.materials.find(m=>normSupplierKey(m.name)===normSupplierKey(name));
+  if(!mat){ mat = {id:uid('mat'), name, unit:'', freqQty:0, freqNote:'', criteria:[]}; DB.materials.push(mat); }
+  return mat;
+}
+function importFromExcelRows(rows, idx){
+  const report = { materialsAdded:0, lotsAdded:0, lotsMatched:0, samplesAdded:0, samplesUpdated:0, skipped:0 };
+  rows.forEach(r=>{
+    const vatLieuName = idx.vatLieu!==-1? (r[idx.vatLieu]||'').toString().trim() : '';
+    const nhaCungCap = idx.nhaCungCap!==-1? (r[idx.nhaCungCap]||'').toString().trim() : '';
+    if(!vatLieuName || !nhaCungCap){ report.skipped++; return; }
+    const matBefore = DB.materials.length;
+    const mat = findOrCreateMaterialByName(vatLieuName);
+    if(DB.materials.length>matBefore) report.materialsAdded++;
+
+    const khoiLuong = idx.khoiLuong!==-1? (parseFloat(r[idx.khoiLuong])||0) : 0;
+    const ngayNhap = idx.ngayNhap!==-1? excelToISODate(r[idx.ngayNhap]) : '';
+    const viTri = idx.viTri!==-1? (r[idx.viTri]||'').toString().trim() : '';
+
+    // Ghi nhận khối lượng nhập hàng (chỉ để theo dõi tổng khối lượng ở tab "Khối lượng nhập hàng"
+    // — KHÔNG dùng để tự tính số tần suất nữa, vì mỗi dòng Excel giờ luôn ứng với đúng 1 tần suất).
+    if(khoiLuong>0){
+      let lot = DB.lots.find(l=>l.materialId===mat.id && normSupplierKey(l.supplier)===normSupplierKey(nhaCungCap) && l.startDate===ngayNhap && Number(l.quantity)===khoiLuong);
+      if(!lot){
+        lot = {id:uid('lot'), materialId:mat.id, name:`${mat.name} — ${ngayNhap||'chưa có ngày'}`, supplier:nhaCungCap, location:viTri, quantity:khoiLuong, startDate:ngayNhap, freqCount:1};
+        DB.lots.push(lot);
+        report.lotsAdded++;
+      } else {
+        report.lotsMatched++;
+      }
+    }
+
+    // Mỗi dòng = đúng 1 tần suất, đánh số tiếp theo trong nhóm vật liệu + nhà cung cấp.
+    const soBBNT = idx.soBBNT!==-1? (r[idx.soBBNT]||'').toString().trim() : '';
+    const ngayLayMau = idx.ngayLayMau!==-1? excelToISODate(r[idx.ngayLayMau]) : '';
+    const nguoiLayMau = idx.nguoiLayMau!==-1? (r[idx.nguoiLayMau]||'').toString().trim() : '';
+    const soKQTN = idx.soKQTN!==-1? (r[idx.soKQTN]||'').toString().trim() : '';
+    const phongThiNghiem = idx.phongThiNghiem!==-1? (r[idx.phongThiNghiem]||'').toString().trim() : '';
+    const ngayCoKQTN = idx.ngayCoKQTN!==-1? excelToISODate(r[idx.ngayCoKQTN]) : '';
+
+    let sample = null;
+    if(soBBNT){
+      // Có Số BBNT trùng với tần suất đã nhập trước đó → cập nhật, tránh tạo trùng khi nhập lại file.
+      sample = samplesForGroup(mat.id, nhaCungCap).find(s=>s.sampleCode && normSupplierKey(s.sampleCode)===normSupplierKey(soBBNT));
+    }
+    if(sample){
+      report.samplesUpdated++;
+    } else {
+      const group = samplesForGroup(mat.id, nhaCungCap);
+      const nextIdx = group.length>0? group[group.length-1].freqIndex+1 : 1;
+      sample = {id:uid('smp'), materialId:mat.id, supplier:nhaCungCap, freqIndex:nextIdx, sampleCode:'', location:'', dateTaken:'', personTaken:'', quantity:'', soKQTN:'', phongThiNghiem:'', ngayKQTN:'', note:'', status:'chua_lay'};
+      DB.samples.push(sample);
+      report.samplesAdded++;
+    }
+      if(soBBNT) sample.sampleCode = soBBNT;
+      if(viTri) sample.location = viTri;
+      if(nguoiLayMau) sample.personTaken = nguoiLayMau;
+      if(ngayLayMau) sample.dateTaken = ngayLayMau;
+      if(soKQTN) sample.soKQTN = soKQTN;
+      if(phongThiNghiem) sample.phongThiNghiem = phongThiNghiem;
+      if(ngayCoKQTN) sample.ngayKQTN = ngayCoKQTN;
+      if(khoiLuong>0 && !sample.quantity) sample.quantity = khoiLuong;
+      if(ngayLayMau) sample.status = 'da_lay';
+  });
+  return report;
+}
+
+function renderExcel(main){
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Nhập từ Excel</h1>
+      <p class="page-desc">Mỗi dòng trong Excel tương ứng đúng <b>1 tần suất</b> (không tự tính theo khối lượng/định mức nữa). Nếu dòng đó có điền cột Khối lượng/Ngày nhập, app vẫn ghi nhận vào tab "Khối lượng nhập hàng" để theo dõi tổng khối lượng, nhưng không dùng để tính số tần suất.</p>
+    </div>
+    <div class="card" id="xlsx-status-card" style="display:flex;align-items:center;gap:10px;"></div>
+    <div class="card">
+      <div class="card-title">1. Tải file mẫu Excel</div>
+      <p class="muted">Có sẵn tiêu đề đúng cột và 1-2 dòng ví dụ — bạn điền dữ liệu của mình vào các dòng bên dưới, giữ nguyên dòng tiêu đề.</p>
+      <button class="btn secondary" id="btn-template">⬇ Tải file mẫu Excel</button>
+    </div>
+    <div class="card">
+      <div class="card-title">2. Chọn file Excel để nhập</div>
+      <p class="muted">Hỗ trợ .xlsx, .xlsm, .xls. Dữ liệu trùng (cùng vật liệu, NCC, ngày, khối lượng / cùng Số BBNT) sẽ được cập nhật thay vì tạo trùng lặp — dữ liệu cũ trong app không bị xoá.</p>
+      <input type="file" id="excel-file" accept=".xlsx,.xls,.xlsm">
+      <div class="form-actions"><button class="btn" id="btn-import">Nhập dữ liệu vào app</button></div>
+      <div id="import-report"></div>
+    </div>
+  `;
+  const statusCard = main.querySelector('#xlsx-status-card');
+  function renderStatus(){
+    if(xlsxStatus==='loading'){
+      statusCard.innerHTML = `<span class="spinner" style="width:16px;height:16px;border-width:2px;margin:0;border-radius:50%;border:2px solid #E1DDC9;border-top-color:var(--navy-2);animation:spin .7s linear infinite;"></span><span class="muted">Đang tải thư viện đọc Excel...</span>`;
+    } else if(xlsxStatus==='ready'){
+      statusCard.innerHTML = `<span style="color:var(--green);font-weight:600;">✓ Sẵn sàng nhập Excel</span>`;
+    } else {
+      statusCard.innerHTML = `<span style="color:var(--red);font-weight:600;">✕ Không tải được thư viện Excel — kiểm tra kết nối mạng.</span> <button class="btn secondary small" id="xlsx-retry" style="margin-left:8px;">Thử lại</button>`;
+      main.querySelector('#xlsx-retry')?.addEventListener('click', ()=>{ setXlsxStatus('loading'); loadXlsxLib(); });
+    }
+  }
+  renderStatus();
+  onXlsxStatusChange(renderStatus);
+
+  function requireReady(){
+    if(xlsxStatus==='ready') return true;
+    showToast(xlsxStatus==='loading'? 'Thư viện đang tải, đợi vài giây rồi thử lại.' : 'Chưa tải được thư viện, bấm Thử lại ở trên.');
+    return false;
+  }
+  main.querySelector('#btn-template').addEventListener('click', ()=>{ if(requireReady()) downloadExcelTemplate(); });
+
+  const fileInput = main.querySelector('#excel-file');
+  const importBtn = main.querySelector('#btn-import');
+  importBtn.addEventListener('click', async ()=>{
+    if(!requireReady()) return;
+    const file = fileInput.files[0];
+    if(!file){ showToast('Vui lòng chọn một file Excel trước.'); return; }
+    importBtn.disabled = true; importBtn.textContent = 'Đang xử lý...';
+    try{
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, {type:'array', cellDates:true});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const grid = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      if(grid.length<2){ showToast('File không có dữ liệu ở dòng nào sau tiêu đề.'); importBtn.disabled=false; importBtn.textContent='Nhập dữ liệu vào app'; return; }
+      const headers = grid[0];
+      const idx = mapExcelHeaders(headers);
+      if(idx.vatLieu===-1 || idx.nhaCungCap===-1){
+        main.querySelector('#import-report').innerHTML = `<div class="card" style="margin-top:12px;"><div class="muted" style="color:var(--red);">Không tìm thấy cột "Vật liệu" và/hoặc "Nhà cung cấp" ở dòng tiêu đề. Hãy dùng file mẫu ở bước 1 làm khuôn.</div></div>`;
+        importBtn.disabled = false; importBtn.textContent = 'Nhập dữ liệu vào app';
+        return;
+      }
+      const report = importFromExcelRows(grid.slice(1), idx);
+      main.querySelector('#import-report').innerHTML = `
+        <div class="card" style="background:#FBFAF5;margin-top:12px;">
+          <div class="card-title">Kết quả nhập dữ liệu</div>
+          <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.9;">
+            <li>Vật liệu mới tạo: <b>${report.materialsAdded}</b></li>
+            <li>Đợt nhập hàng mới: <b>${report.lotsAdded}</b> — đã khớp với đợt có sẵn (không tạo trùng): <b>${report.lotsMatched}</b></li>
+            <li>Tần suất mới thêm: <b>${report.samplesAdded}</b></li>
+            <li>Tần suất đã khớp Số BBNT có sẵn và cập nhật: <b>${report.samplesUpdated}</b></li>
+            <li>Dòng bị bỏ qua (thiếu Vật liệu/Nhà cung cấp): <b>${report.skipped}</b></li>
+          </ul>
+        </div>
+      `;
+      persist();
+      showToast('Đã nhập dữ liệu từ Excel.');
+    }catch(e){
+      console.error(e);
+      showToast('Không đọc được file này — kiểm tra lại đây có đúng là file Excel hợp lệ không.');
+    }
+    importBtn.disabled = false; importBtn.textContent = 'Nhập dữ liệu vào app';
+    fileInput.value = '';
+  });
+}
+
+/* ==========================================================
    MODAL — lives entirely outside the tab render cycle so
    typing inside it is never interrupted by a background redraw.
    ========================================================== */
@@ -830,9 +1055,9 @@ function openModal(config){
   backdrop.querySelector('#modal-close').addEventListener('click', doClose);
   backdrop.querySelector('#modal-cancel').addEventListener('click', doClose);
   backdrop.querySelector('#modal-save').addEventListener('click', doSave);
-  backdrop.addEventListener('click', (e)=>{ if(e.target===backdrop) doClose(); });
+  // Deliberately no "click outside" and no Esc-to-close — a stray click or key press
+  // shouldn't discard a form in progress. Closing only happens via the ✕ or "Huỷ" button.
   backdrop.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape') doClose();
     if(e.key==='Enter' && (e.target.tagName==='INPUT' || e.target.tagName==='SELECT')){ e.preventDefault(); doSave(); }
   });
   activeModal = { backdrop };

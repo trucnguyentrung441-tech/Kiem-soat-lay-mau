@@ -835,10 +835,14 @@ loadXlsxLib();
 
 const EXCEL_TEMPLATE_HEADERS = ['Vật liệu','Nhà cung cấp','Khối lượng','Ngày nhập','Vị trí/phân khu','Số BBNT','Người lấy mẫu','Ngày lấy mẫu','Số KQTN','Phòng thí nghiệm','Ngày có KQTN'];
 const EXCEL_HEADER_MAP = {
-  vatLieu:['vatlieu'], nhaCungCap:['nhacungcap','ncc'], khoiLuong:['khoiluong'],
-  ngayNhap:['ngaynhap'], viTri:['vitriphankhu','vitri','phankhu'],
-  soBBNT:['sobbnt','bbnt','mamau'], nguoiLayMau:['nguoilaymau'], ngayLayMau:['ngaylaymau'],
-  soKQTN:['sokqtn'], phongThiNghiem:['phongthinghiem'], ngayCoKQTN:['ngaycokqtn','ngaycoketqua']
+  // Mẫu tổng quát của app (chế độ "generic")
+  vatLieu:['vatlieu'], khoiLuong:['khoiluong'], ngayNhap:['ngaynhap'], nguoiLayMau:['nguoilaymau'],
+  // Dùng chung cho cả 2 chế độ
+  nhaCungCap:['nhacungcap','ncc'], viTri:['vitriphankhu','vitri','phankhu','vitrilaymau'],
+  soBBNT:['sobbnt','bbnt','mamau','ntvl'], ngayLayMau:['ngaylaymau'], soKQTN:['sokqtn'],
+  phongThiNghiem:['phongthinghiem'], ngayCoKQTN:['ngaycokqtn','ngaycoketqua','ngaynt'],
+  // Đặc thù cho file dạng "DATA_VLDV" (hệ thống KCS-NTVL nhiều sheet)
+  sttCol:['stt'], vatLieuRaw:['tenvatlieu'], khoiLuongMau:['kllaymau']
 };
 function normKey(h){ return stripDiacritics(String(h||'')).toLowerCase().replace(/[^a-z0-9]/g,''); }
 function stripDiacritics(str){ return str.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D'); }
@@ -851,6 +855,46 @@ function mapExcelHeaders(headers){
     out[field]=idx;
   });
   return out;
+}
+/** Scans the first ~15 rows of a sheet grid for the row that best matches a known set of headers
+ *  (headers aren't always on row 1 — some real project files put them on row 5+). Returns the best
+ *  match plus which import "mode" it implies: 'vldv' for the DATA_VLDV-style KCS-NTVL layout
+ *  (identified by having an STT column), or 'generic' for the app's own flat template. */
+function findBestHeaderRow(grid){
+  let best = {rowIdx:-1, idx:null, score:-1, mode:null};
+  const maxScan = Math.min(grid.length, 15);
+  for(let r=0;r<maxScan;r++){
+    const headers = grid[r];
+    if(!headers || headers.every(h=>!h)) continue;
+    const idx = mapExcelHeaders(headers);
+    let genericScore=0;
+    ['vatLieu','nhaCungCap','khoiLuong','ngayNhap','viTri','soBBNT','ngayLayMau','soKQTN','phongThiNghiem','ngayCoKQTN'].forEach(f=>{ if(idx[f]!==-1) genericScore++; });
+    let vldvScore=0;
+    ['sttCol','vatLieuRaw','nhaCungCap','ngayLayMau','soBBNT','viTri','khoiLuongMau','phongThiNghiem','ngayCoKQTN','soKQTN'].forEach(f=>{ if(idx[f]!==-1) vldvScore++; });
+    const score = Math.max(genericScore, vldvScore);
+    if(score>best.score){ best = {rowIdx:r, idx, score, mode: vldvScore>=genericScore?'vldv':'generic'}; }
+  }
+  return best;
+}
+/** Cleans a text/code cell, filtering out the "empty cell formatted as a time" artifact
+ *  (shows up as '00:00:00' or an Excel-epoch date) that some real spreadsheets leave behind. */
+function cleanExcelCode(v){
+  if(v===undefined||v===null||v==='') return '';
+  if(typeof v==='number' && v===0) return '';
+  const s = String(v).trim();
+  if(/^0{1,2}:0{2}:0{2}$/.test(s)) return '';
+  if(/^1899-12-30|^1900-01-0[01]/.test(s)) return '';
+  return s;
+}
+/** DATA_VLDV-style sheets often store "Tên vật liệu" as a concatenated "Vật liệu - Nhà cung cấp - Tần suất"
+ *  label. This pulls out just the material name, handling both the well-spaced " - " separator and the
+ *  no-space "-Tần suất N-..." / "-Công ty..." suffix pattern seen in some rows. */
+function extractMaterialName(raw){
+  let s = (raw||'').toString().trim();
+  if(!s) return '';
+  s = s.split(/\s[-–—]\s/)[0].trim();
+  s = s.replace(/-\s*(Tần\s*suất|Công\s*ty|Cty)\b.*$/i, '').trim();
+  return s;
 }
 function excelToISODate(v){
   if(v===undefined||v===null||v==='') return '';
@@ -880,40 +924,53 @@ function findOrCreateMaterialByName(name){
   if(!mat){ mat = {id:uid('mat'), name, unit:'', freqQty:0, freqNote:'', criteria:[]}; DB.materials.push(mat); }
   return mat;
 }
-function importFromExcelRows(rows, idx){
+function importFromExcelRows(rows, idx, mode){
   const report = { materialsAdded:0, lotsAdded:0, lotsMatched:0, samplesAdded:0, samplesUpdated:0, skipped:0 };
   rows.forEach(r=>{
-    const vatLieuName = idx.vatLieu!==-1? (r[idx.vatLieu]||'').toString().trim() : '';
-    const nhaCungCap = idx.nhaCungCap!==-1? (r[idx.nhaCungCap]||'').toString().trim() : '';
-    if(!vatLieuName || !nhaCungCap){ report.skipped++; return; }
+    const sttVal = idx.sttCol!==-1? r[idx.sttCol] : null;
+    if(mode==='vldv' && (sttVal===null||sttVal===undefined||sttVal==='')){ report.skipped++; return; }
+
+    const vatLieuName = mode==='vldv'
+      ? extractMaterialName(idx.vatLieuRaw!==-1? r[idx.vatLieuRaw] : '')
+      : (idx.vatLieu!==-1? (r[idx.vatLieu]||'').toString().trim() : '');
+    const nhaCungCap = idx.nhaCungCap!==-1? cleanExcelCode(r[idx.nhaCungCap]) : '';
+    if(!vatLieuName || !nhaCungCap || /^\d+(\.\d+)?$/.test(vatLieuName) || vatLieuName.includes('#REF') || nhaCungCap.includes('#REF')){
+      report.skipped++; return;
+    }
     const matBefore = DB.materials.length;
     const mat = findOrCreateMaterialByName(vatLieuName);
     if(DB.materials.length>matBefore) report.materialsAdded++;
 
-    const khoiLuong = idx.khoiLuong!==-1? (parseFloat(r[idx.khoiLuong])||0) : 0;
-    const ngayNhap = idx.ngayNhap!==-1? excelToISODate(r[idx.ngayNhap]) : '';
-    const viTri = idx.viTri!==-1? (r[idx.viTri]||'').toString().trim() : '';
+    const viTri = idx.viTri!==-1? cleanExcelCode(r[idx.viTri]) : '';
 
-    // Ghi nhận khối lượng nhập hàng (chỉ để theo dõi tổng khối lượng ở tab "Khối lượng nhập hàng"
-    // — KHÔNG dùng để tự tính số tần suất nữa, vì mỗi dòng Excel giờ luôn ứng với đúng 1 tần suất).
-    if(khoiLuong>0){
-      let lot = DB.lots.find(l=>l.materialId===mat.id && normSupplierKey(l.supplier)===normSupplierKey(nhaCungCap) && l.startDate===ngayNhap && Number(l.quantity)===khoiLuong);
-      if(!lot){
-        lot = {id:uid('lot'), materialId:mat.id, name:`${mat.name} — ${ngayNhap||'chưa có ngày'}`, supplier:nhaCungCap, location:viTri, quantity:khoiLuong, startDate:ngayNhap, freqCount:1};
-        DB.lots.push(lot);
-        report.lotsAdded++;
-      } else {
-        report.lotsMatched++;
+    // Chế độ "generic" (mẫu Excel của app): cột Khối lượng/Ngày nhập tạo/khớp một đợt nhập hàng.
+    // Chế độ "vldv" (file dạng DATA_VLDV nhiều sheet): KHÔNG tạo khối lượng nhập hàng từ đây —
+    // phần đó dành riêng cho một file khối lượng khác.
+    if(mode==='generic'){
+      const khoiLuong = idx.khoiLuong!==-1? (parseFloat(r[idx.khoiLuong])||0) : 0;
+      const ngayNhap = idx.ngayNhap!==-1? excelToISODate(r[idx.ngayNhap]) : '';
+      if(khoiLuong>0){
+        let lot = DB.lots.find(l=>l.materialId===mat.id && normSupplierKey(l.supplier)===normSupplierKey(nhaCungCap) && l.startDate===ngayNhap && Number(l.quantity)===khoiLuong);
+        if(!lot){
+          lot = {id:uid('lot'), materialId:mat.id, name:`${mat.name} — ${ngayNhap||'chưa có ngày'}`, supplier:nhaCungCap, location:viTri, quantity:khoiLuong, startDate:ngayNhap, freqCount:1};
+          DB.lots.push(lot);
+          report.lotsAdded++;
+        } else {
+          report.lotsMatched++;
+        }
       }
     }
 
     // Mỗi dòng = đúng 1 tần suất, đánh số tiếp theo trong nhóm vật liệu + nhà cung cấp.
-    const soBBNT = idx.soBBNT!==-1? (r[idx.soBBNT]||'').toString().trim() : '';
+    const soBBNT = idx.soBBNT!==-1? cleanExcelCode(r[idx.soBBNT]) : '';
     const ngayLayMau = idx.ngayLayMau!==-1? excelToISODate(r[idx.ngayLayMau]) : '';
-    const nguoiLayMau = idx.nguoiLayMau!==-1? (r[idx.nguoiLayMau]||'').toString().trim() : '';
-    const soKQTN = idx.soKQTN!==-1? (r[idx.soKQTN]||'').toString().trim() : '';
-    const phongThiNghiem = idx.phongThiNghiem!==-1? (r[idx.phongThiNghiem]||'').toString().trim() : '';
+    const nguoiLayMau = idx.nguoiLayMau!==-1? cleanExcelCode(r[idx.nguoiLayMau]) : '';
+    const soKQTN = idx.soKQTN!==-1? cleanExcelCode(r[idx.soKQTN]) : '';
+    const phongThiNghiem = idx.phongThiNghiem!==-1? cleanExcelCode(r[idx.phongThiNghiem]) : '';
     const ngayCoKQTN = idx.ngayCoKQTN!==-1? excelToISODate(r[idx.ngayCoKQTN]) : '';
+    const mauQuantity = mode==='vldv'
+      ? (idx.khoiLuongMau!==-1? (parseFloat(r[idx.khoiLuongMau])||0) : 0)
+      : (idx.khoiLuong!==-1? (parseFloat(r[idx.khoiLuong])||0) : 0);
 
     let sample = null;
     if(soBBNT){
@@ -929,15 +986,15 @@ function importFromExcelRows(rows, idx){
       DB.samples.push(sample);
       report.samplesAdded++;
     }
-      if(soBBNT) sample.sampleCode = soBBNT;
-      if(viTri) sample.location = viTri;
-      if(nguoiLayMau) sample.personTaken = nguoiLayMau;
-      if(ngayLayMau) sample.dateTaken = ngayLayMau;
-      if(soKQTN) sample.soKQTN = soKQTN;
-      if(phongThiNghiem) sample.phongThiNghiem = phongThiNghiem;
-      if(ngayCoKQTN) sample.ngayKQTN = ngayCoKQTN;
-      if(khoiLuong>0 && !sample.quantity) sample.quantity = khoiLuong;
-      if(ngayLayMau) sample.status = 'da_lay';
+    if(soBBNT) sample.sampleCode = soBBNT;
+    if(viTri) sample.location = viTri;
+    if(nguoiLayMau) sample.personTaken = nguoiLayMau;
+    if(ngayLayMau) sample.dateTaken = ngayLayMau;
+    if(soKQTN) sample.soKQTN = soKQTN;
+    if(phongThiNghiem) sample.phongThiNghiem = phongThiNghiem;
+    if(ngayCoKQTN) sample.ngayKQTN = ngayCoKQTN;
+    if(mauQuantity>0 && !sample.quantity) sample.quantity = mauQuantity;
+    if(ngayLayMau) sample.status = 'da_lay';
   });
   return report;
 }
@@ -946,7 +1003,7 @@ function renderExcel(main){
   main.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Nhập từ Excel</h1>
-      <p class="page-desc">Mỗi dòng trong Excel tương ứng đúng <b>1 tần suất</b> (không tự tính theo khối lượng/định mức nữa). Nếu dòng đó có điền cột Khối lượng/Ngày nhập, app vẫn ghi nhận vào tab "Khối lượng nhập hàng" để theo dõi tổng khối lượng, nhưng không dùng để tính số tần suất.</p>
+      <p class="page-desc">App tự quét qua toàn bộ các sheet trong file để tìm đúng bảng dữ liệu (kể cả khi tiêu đề không nằm ở dòng 1 hay sheet đầu tiên), tự nhận diện đây là file mẫu chuẩn của app hay file dạng "DATA_VLDV" nhiều sheet — mỗi dòng dữ liệu tương ứng đúng <b>1 tần suất</b>.</p>
     </div>
     <div class="card" id="xlsx-status-card" style="display:flex;align-items:center;gap:10px;"></div>
     <div class="card">
@@ -993,26 +1050,35 @@ function renderExcel(main){
     try{
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, {type:'array', cellDates:true});
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const grid = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
-      if(grid.length<2){ showToast('File không có dữ liệu ở dòng nào sau tiêu đề.'); importBtn.disabled=false; importBtn.textContent='Nhập dữ liệu vào app'; return; }
-      const headers = grid[0];
-      const idx = mapExcelHeaders(headers);
-      if(idx.vatLieu===-1 || idx.nhaCungCap===-1){
-        main.querySelector('#import-report').innerHTML = `<div class="card" style="margin-top:12px;"><div class="muted" style="color:var(--red);">Không tìm thấy cột "Vật liệu" và/hoặc "Nhà cung cấp" ở dòng tiêu đề. Hãy dùng file mẫu ở bước 1 làm khuôn.</div></div>`;
+      // Quét TẤT CẢ các sheet trong file (tiêu đề có thể không nằm ở sheet đầu tiên hay dòng đầu tiên —
+      // ví dụ file KCS-NTVL có 28 sheet, dữ liệu thật nằm ở sheet "DATA_VLDV", tiêu đề ở dòng 5).
+      let overallBest = {score:-1};
+      let bestSheetName = null, bestGrid = null;
+      wb.SheetNames.forEach(name=>{
+        const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
+        if(grid.length<2) return;
+        const found = findBestHeaderRow(grid);
+        if(found.score > overallBest.score){ overallBest = found; bestSheetName = name; bestGrid = grid; }
+      });
+      if(!bestSheetName || overallBest.score<3){
+        main.querySelector('#import-report').innerHTML = `<div class="card" style="margin-top:12px;"><div class="muted" style="color:var(--red);">Không tìm thấy sheet nào có cấu trúc cột phù hợp trong file này. Hãy dùng file mẫu ở bước 1 làm khuôn, hoặc kiểm tra lại tên các cột.</div></div>`;
         importBtn.disabled = false; importBtn.textContent = 'Nhập dữ liệu vào app';
         return;
       }
-      const report = importFromExcelRows(grid.slice(1), idx);
+      const idx = overallBest.idx;
+      const mode = overallBest.mode;
+      const dataRows = bestGrid.slice(overallBest.rowIdx+1);
+      const report = importFromExcelRows(dataRows, idx, mode);
       main.querySelector('#import-report').innerHTML = `
         <div class="card" style="background:#FBFAF5;margin-top:12px;">
           <div class="card-title">Kết quả nhập dữ liệu</div>
+          <p class="muted" style="margin:0 0 8px 0;">Đã nhận diện: sheet <b>${esc(bestSheetName)}</b>, dòng tiêu đề số <b>${overallBest.rowIdx+1}</b>, ${mode==='vldv'? 'chế độ <b>Thông tin lấy mẫu</b> (chỉ tạo tần suất, không tạo khối lượng nhập hàng)' : 'chế độ <b>mẫu chuẩn</b> (tạo cả khối lượng nhập hàng và tần suất)'}.</p>
           <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.9;">
             <li>Vật liệu mới tạo: <b>${report.materialsAdded}</b></li>
-            <li>Đợt nhập hàng mới: <b>${report.lotsAdded}</b> — đã khớp với đợt có sẵn (không tạo trùng): <b>${report.lotsMatched}</b></li>
+            ${mode==='generic'? `<li>Đợt nhập hàng mới: <b>${report.lotsAdded}</b> — đã khớp với đợt có sẵn (không tạo trùng): <b>${report.lotsMatched}</b></li>` : ''}
             <li>Tần suất mới thêm: <b>${report.samplesAdded}</b></li>
             <li>Tần suất đã khớp Số BBNT có sẵn và cập nhật: <b>${report.samplesUpdated}</b></li>
-            <li>Dòng bị bỏ qua (thiếu Vật liệu/Nhà cung cấp): <b>${report.skipped}</b></li>
+            <li>Dòng bị bỏ qua (thiếu dữ liệu / dòng tiêu đề nhóm / dòng lỗi công thức): <b>${report.skipped}</b></li>
           </ul>
         </div>
       `;

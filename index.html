@@ -121,7 +121,6 @@ const TABS = [
   {id:'lots', label:'Khối lượng nhập hàng', icon:'▦'},
   {id:'sampling', label:'Thông tin lấy mẫu vật liệu', icon:'●'},
   {id:'results', label:'Danh mục theo dõi lấy mẫu vật liệu', icon:'✓'},
-  {id:'excel', label:'Nhập từ Excel', icon:'⇅'},
 ];
 
 let DB = null;
@@ -131,6 +130,14 @@ let activeModal = null;
 function uid(p){ return (p||'id')+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function esc(s){ return (s===undefined||s===null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function val(id){ return document.getElementById(id).value.trim(); }
+/** Formats a quantity/định mức number for display: rounds to at most 2 decimal places
+ *  and drops trailing zeros (e.g. 1900 -> "1900", 1900.5 -> "1900.5", 12.345 -> "12.35"). */
+function fmtQty(n){
+  const num = typeof n==='number'? n : parseFloat(n);
+  if(isNaN(num)) return '';
+  const rounded = Math.round(num*100)/100;
+  return rounded.toLocaleString('vi-VN', {maximumFractionDigits:2});
+}
 function freqLabel(n){ return 'Tần suất ' + String(n).padStart(2,'0'); }
 
 function defaultData(){
@@ -299,7 +306,6 @@ function renderMain(){
   else if(state.tab==='lots') renderLots(main);
   else if(state.tab==='sampling') renderSampling(main);
   else if(state.tab==='results') renderResults(main);
-  else if(state.tab==='excel') renderExcel(main);
 }
 
 /* ---------- DASHBOARD ---------- */
@@ -368,7 +374,7 @@ function renderDashboard(main){
                 <tr>
                   <td><span class="freq-chip">${freqLabel(r.s.freqIndex)}</span></td>
                   <td>${esc(r.s.supplier)||'—'}</td>
-                  <td class="mono">${esc(r.s.quantity)||'—'}</td>
+                  <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
                   <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
                   <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
                   <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
@@ -404,7 +410,7 @@ function renderMaterials(main){
           <tr>
             <td>${esc(m.name)}</td>
             <td>${esc(m.unit)}</td>
-            <td class="mono">${m.freqQty>0? `${m.freqQty} ${esc(m.unit)}/mẫu` : '—'}</td>
+            <td class="mono">${m.freqQty>0? `${fmtQty(m.freqQty)} ${esc(m.unit)}/mẫu` : '—'}</td>
             <td class="muted">${m.criteria.map(esc).join(', ')}</td>
             <td class="row-flex">
               <button class="btn secondary small" data-edit="${m.id}">Sửa</button>
@@ -492,8 +498,8 @@ function renderLots(main){
               <td>${esc(a.mat.name)}</td>
               <td>${esc(a.supplier)||'—'}</td>
               <td class="mono">${a.lotsCount}</td>
-              <td class="mono">${a.totalQty} ${esc(a.mat.unit)}</td>
-              <td class="mono">${a.mat.freqQty>0? `${a.mat.freqQty} ${esc(a.mat.unit)}/mẫu` : '—'}</td>
+              <td class="mono">${fmtQty(a.totalQty)} ${esc(a.mat.unit)}</td>
+              <td class="mono">${a.mat.freqQty>0? `${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : '—'}</td>
               <td class="mono">${a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
             </tr>`).join('')}
         </tbody>
@@ -507,7 +513,7 @@ function renderLots(main){
         <div class="lot-header">
           <div>
             <div class="lot-name">${mat?esc(mat.name):'—'} — ${esc(l.startDate)||'chưa có ngày nhập'}</div>
-            <div class="lot-meta">Khối lượng: ${l.quantity||0} ${mat?esc(mat.unit):''} · Nhà cung cấp: ${esc(l.supplier)||'—'} · Phân khu: ${esc(l.location)||'—'} · Ngày nhập: ${esc(l.startDate)||'—'}</div>
+            <div class="lot-meta">Khối lượng: ${l.quantity? fmtQty(l.quantity) : 0} ${mat?esc(mat.unit):''} · Nhà cung cấp: ${esc(l.supplier)||'—'} · Phân khu: ${esc(l.location)||'—'} · Ngày nhập: ${esc(l.startDate)||'—'}</div>
             <div class="lot-meta">Tần suất lấy mẫu được tính chung cho cả nhóm "${mat?esc(mat.name):''} — ${esc(l.supplier)||'chưa rõ NCC'}" — xem tiến độ ở bảng tổng hợp phía trên hoặc tab "Thông tin lấy mẫu vật liệu".</div>
           </div>
           <div class="row-flex">
@@ -575,7 +581,7 @@ function openLotModal(id){
         else required = Math.max(1, otherLots.length+1);
         const diff = required - existingCount;
         preview.innerHTML = `Nhóm <b>"${mat?esc(mat.name):''} — ${esc(supplier)||'chưa rõ NCC'}"</b> sau khi lưu: tổng khối lượng <b>${newTotal}</b> ${mat?esc(mat.unit):''} → cần <b>${required}</b> tần suất`
-          + (mat&&mat.freqQty>0? ` (định mức ${mat.freqQty} ${esc(mat.unit)}/mẫu)` : ' (vật liệu chưa có định mức, tạm tính 1 tần suất/đợt)')
+          + (mat&&mat.freqQty>0? ` (định mức ${fmtQty(mat.freqQty)} ${esc(mat.unit)}/mẫu)` : ' (vật liệu chưa có định mức, tạm tính 1 tần suất/đợt)')
           + `. Hiện nhóm đang có ${existingCount} tần suất — `
           + (diff>0? `sẽ <b>thêm ${diff}</b> tần suất mới, đánh số tiếp theo.` : diff<0? `dư ${-diff} tần suất (chỉ rút bớt các tần suất chưa lấy mẫu).` : `đã đủ, không đổi.`);
       }
@@ -627,7 +633,7 @@ function renderSampling(main){
             <tr>
               <td>${esc(a.mat.name)}</td>
               <td>${esc(a.supplier)||'—'}</td>
-              <td class="mono">${a.totalQty} ${esc(a.mat.unit)}</td>
+              <td class="mono">${fmtQty(a.totalQty)} ${esc(a.mat.unit)}</td>
               <td class="mono">${a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
               <td class="mono">${a.taken}</td>
               <td>${a.remaining===null? '—' : a.remaining>0? `<span class="badge pending">Còn ${a.remaining}</span>` : `<span class="badge pass">Đã đủ</span>`}</td>
@@ -651,7 +657,7 @@ function renderSampling(main){
               <tr>
                 <td><span class="freq-chip">${freqLabel(s.freqIndex)}</span></td>
                 <td class="mono">${esc(s.sampleCode)||'—'}</td>
-                <td class="mono">${esc(s.quantity)||'—'}</td>
+                <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
                 <td>${esc(s.location)||'—'}</td>
                 <td>${esc(s.personTaken)||'—'}</td>
                 <td>${esc(s.dateTaken)||'—'}</td>
@@ -759,7 +765,7 @@ function renderResults(main){
           <div class="progress-top">
             <div>
               <div class="progress-name">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— NCC: ${esc(a.supplier)||'Chưa rõ'}</span></div>
-              <div class="progress-sub">Tổng khối lượng đã về: ${a.totalQty} ${esc(a.mat.unit)}${a.mat.freqQty>0? ` · Định mức ${a.mat.freqQty} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
+              <div class="progress-sub">Tổng khối lượng đã về: ${fmtQty(a.totalQty)} ${esc(a.mat.unit)}${a.mat.freqQty>0? ` · Định mức ${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
             </div>
             <div class="progress-nums">
               ${a.requiredTotal===null? 'Chưa tính được tần suất' : `Đã lấy ${a.taken}/${a.requiredTotal} tần suất`}
@@ -787,7 +793,7 @@ function renderResults(main){
               <tr>
                 <td><span class="freq-chip">${freqLabel(s.freqIndex)}</span></td>
                 <td>${esc(s.supplier)||'—'}</td>
-                <td class="mono">${esc(s.quantity)||'—'}</td>
+                <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
                 <td>${daNghiemThu? `<span class="mono">${esc(s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
                 <td class="mono">${esc(s.soKQTN)||'—'}</td>
                 <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
@@ -802,295 +808,6 @@ function renderResults(main){
       }).join('')
     }
   `;
-}
-
-/* ==========================================================
-   EXCEL IMPORT
-   One flat sheet, one row per tần suất (sampling event) — optionally
-   sampled). Headers are matched loosely (case/diacritic/spacing
-   insensitive) so the exact template isn't mandatory. Import is
-   additive: it matches existing lots/samples where it reasonably
-   can and otherwise adds new ones — it never deletes anything.
-   ========================================================== */
-const XLSX_SOURCES = [
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
-  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-  'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
-];
-let xlsxStatus = 'loading'; // 'loading' | 'ready' | 'failed'
-let xlsxStatusListeners = [];
-function onXlsxStatusChange(fn){ xlsxStatusListeners.push(fn); }
-function setXlsxStatus(s){ xlsxStatus = s; xlsxStatusListeners.forEach(fn=>fn(s)); }
-function loadXlsxLib(sourceIndex){
-  sourceIndex = sourceIndex || 0;
-  if(typeof XLSX !== 'undefined'){ setXlsxStatus('ready'); return; }
-  if(sourceIndex >= XLSX_SOURCES.length){ setXlsxStatus('failed'); return; }
-  const s = document.createElement('script');
-  s.src = XLSX_SOURCES[sourceIndex];
-  s.onload = ()=>{ if(typeof XLSX !== 'undefined') setXlsxStatus('ready'); else loadXlsxLib(sourceIndex+1); };
-  s.onerror = ()=> loadXlsxLib(sourceIndex+1);
-  document.head.appendChild(s);
-}
-loadXlsxLib();
-
-const EXCEL_TEMPLATE_HEADERS = ['Vật liệu','Nhà cung cấp','Khối lượng','Ngày nhập','Vị trí/phân khu','Số BBNT','Người lấy mẫu','Ngày lấy mẫu','Số KQTN','Phòng thí nghiệm','Ngày có KQTN'];
-const EXCEL_HEADER_MAP = {
-  // Mẫu tổng quát của app (chế độ "generic")
-  vatLieu:['vatlieu'], khoiLuong:['khoiluong'], ngayNhap:['ngaynhap'], nguoiLayMau:['nguoilaymau'],
-  // Dùng chung cho cả 2 chế độ
-  nhaCungCap:['nhacungcap','ncc'], viTri:['vitriphankhu','vitri','phankhu','vitrilaymau'],
-  soBBNT:['sobbnt','bbnt','mamau','ntvl'], ngayLayMau:['ngaylaymau'], soKQTN:['sokqtn'],
-  phongThiNghiem:['phongthinghiem'], ngayCoKQTN:['ngaycokqtn','ngaycoketqua','ngaynt'],
-  // Đặc thù cho file dạng "DATA_VLDV" (hệ thống KCS-NTVL nhiều sheet)
-  sttCol:['stt'], vatLieuRaw:['tenvatlieu'], khoiLuongMau:['kllaymau']
-};
-function normKey(h){ return stripDiacritics(String(h||'')).toLowerCase().replace(/[^a-z0-9]/g,''); }
-function stripDiacritics(str){ return str.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D'); }
-function mapExcelHeaders(headers){
-  const norm = headers.map(normKey);
-  const out = {};
-  Object.keys(EXCEL_HEADER_MAP).forEach(field=>{
-    let idx=-1;
-    for(const c of EXCEL_HEADER_MAP[field]){ idx = norm.indexOf(c); if(idx!==-1) break; }
-    out[field]=idx;
-  });
-  return out;
-}
-/** Scans the first ~15 rows of a sheet grid for the row that best matches a known set of headers
- *  (headers aren't always on row 1 — some real project files put them on row 5+). Returns the best
- *  match plus which import "mode" it implies: 'vldv' for the DATA_VLDV-style KCS-NTVL layout
- *  (identified by having an STT column), or 'generic' for the app's own flat template. */
-function findBestHeaderRow(grid){
-  let best = {rowIdx:-1, idx:null, score:-1, mode:null};
-  const maxScan = Math.min(grid.length, 15);
-  for(let r=0;r<maxScan;r++){
-    const headers = grid[r];
-    if(!headers || headers.every(h=>!h)) continue;
-    const idx = mapExcelHeaders(headers);
-    let genericScore=0;
-    ['vatLieu','nhaCungCap','khoiLuong','ngayNhap','viTri','soBBNT','ngayLayMau','soKQTN','phongThiNghiem','ngayCoKQTN'].forEach(f=>{ if(idx[f]!==-1) genericScore++; });
-    let vldvScore=0;
-    ['sttCol','vatLieuRaw','nhaCungCap','ngayLayMau','soBBNT','viTri','khoiLuongMau','phongThiNghiem','ngayCoKQTN','soKQTN'].forEach(f=>{ if(idx[f]!==-1) vldvScore++; });
-    const score = Math.max(genericScore, vldvScore);
-    if(score>best.score){ best = {rowIdx:r, idx, score, mode: vldvScore>=genericScore?'vldv':'generic'}; }
-  }
-  return best;
-}
-/** Cleans a text/code cell, filtering out the "empty cell formatted as a time" artifact
- *  (shows up as '00:00:00' or an Excel-epoch date) that some real spreadsheets leave behind. */
-function cleanExcelCode(v){
-  if(v===undefined||v===null||v==='') return '';
-  if(typeof v==='number' && v===0) return '';
-  const s = String(v).trim();
-  if(/^0{1,2}:0{2}:0{2}$/.test(s)) return '';
-  if(/^1899-12-30|^1900-01-0[01]/.test(s)) return '';
-  return s;
-}
-/** DATA_VLDV-style sheets often store "Tên vật liệu" as a concatenated "Vật liệu - Nhà cung cấp - Tần suất"
- *  label. This pulls out just the material name, handling both the well-spaced " - " separator and the
- *  no-space "-Tần suất N-..." / "-Công ty..." suffix pattern seen in some rows. */
-function extractMaterialName(raw){
-  let s = (raw||'').toString().trim();
-  if(!s) return '';
-  s = s.split(/\s[-–—]\s/)[0].trim();
-  s = s.replace(/-\s*(Tần\s*suất|Công\s*ty|Cty)\b.*$/i, '').trim();
-  return s;
-}
-function excelToISODate(v){
-  if(v===undefined||v===null||v==='') return '';
-  if(v instanceof Date && !isNaN(v)){
-    const y=v.getFullYear(), m=String(v.getMonth()+1).padStart(2,'0'), d=String(v.getDate()).padStart(2,'0');
-    return `${y}-${m}-${d}`;
-  }
-  const s = String(v).trim();
-  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){ const [y,m,d]=s.split('-'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; }
-  if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){ const [d,m,y]=s.split('/'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; }
-  return s;
-}
-function downloadExcelTemplate(){
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([
-    EXCEL_TEMPLATE_HEADERS,
-    ['Cấp phối đá dăm (móng đường)','Công ty CP VLXD ABC',250,'2026-09-01','Phân khu A','BBNT-01','Trần Văn B','2026-09-02','KQTN-01','LAS-XD 123','2026-09-06'],
-    ['Cấp phối đá dăm (móng đường)','Công ty CP VLXD ABC',200,'2026-09-10','Phân khu A','','','','','','']
-  ]);
-  XLSX.utils.book_append_sheet(wb, ws, 'DuLieu');
-  XLSX.writeFile(wb, 'mau_nhap_du_lieu.xlsx');
-}
-function findOrCreateMaterialByName(name){
-  name = (name||'').toString().trim();
-  if(!name) return null;
-  let mat = DB.materials.find(m=>normSupplierKey(m.name)===normSupplierKey(name));
-  if(!mat){ mat = {id:uid('mat'), name, unit:'', freqQty:0, freqNote:'', criteria:[]}; DB.materials.push(mat); }
-  return mat;
-}
-function importFromExcelRows(rows, idx, mode){
-  const report = { materialsAdded:0, lotsAdded:0, lotsMatched:0, samplesAdded:0, samplesUpdated:0, skipped:0 };
-  rows.forEach(r=>{
-    const sttVal = idx.sttCol!==-1? r[idx.sttCol] : null;
-    if(mode==='vldv' && (sttVal===null||sttVal===undefined||sttVal==='')){ report.skipped++; return; }
-
-    const vatLieuName = mode==='vldv'
-      ? extractMaterialName(idx.vatLieuRaw!==-1? r[idx.vatLieuRaw] : '')
-      : (idx.vatLieu!==-1? (r[idx.vatLieu]||'').toString().trim() : '');
-    const nhaCungCap = idx.nhaCungCap!==-1? cleanExcelCode(r[idx.nhaCungCap]) : '';
-    if(!vatLieuName || !nhaCungCap || /^\d+(\.\d+)?$/.test(vatLieuName) || vatLieuName.includes('#REF') || nhaCungCap.includes('#REF')){
-      report.skipped++; return;
-    }
-    const matBefore = DB.materials.length;
-    const mat = findOrCreateMaterialByName(vatLieuName);
-    if(DB.materials.length>matBefore) report.materialsAdded++;
-
-    const viTri = idx.viTri!==-1? cleanExcelCode(r[idx.viTri]) : '';
-
-    // Chế độ "generic" (mẫu Excel của app): cột Khối lượng/Ngày nhập tạo/khớp một đợt nhập hàng.
-    // Chế độ "vldv" (file dạng DATA_VLDV nhiều sheet): KHÔNG tạo khối lượng nhập hàng từ đây —
-    // phần đó dành riêng cho một file khối lượng khác.
-    if(mode==='generic'){
-      const khoiLuong = idx.khoiLuong!==-1? (parseFloat(r[idx.khoiLuong])||0) : 0;
-      const ngayNhap = idx.ngayNhap!==-1? excelToISODate(r[idx.ngayNhap]) : '';
-      if(khoiLuong>0){
-        let lot = DB.lots.find(l=>l.materialId===mat.id && normSupplierKey(l.supplier)===normSupplierKey(nhaCungCap) && l.startDate===ngayNhap && Number(l.quantity)===khoiLuong);
-        if(!lot){
-          lot = {id:uid('lot'), materialId:mat.id, name:`${mat.name} — ${ngayNhap||'chưa có ngày'}`, supplier:nhaCungCap, location:viTri, quantity:khoiLuong, startDate:ngayNhap, freqCount:1};
-          DB.lots.push(lot);
-          report.lotsAdded++;
-        } else {
-          report.lotsMatched++;
-        }
-      }
-    }
-
-    // Mỗi dòng = đúng 1 tần suất, đánh số tiếp theo trong nhóm vật liệu + nhà cung cấp.
-    const soBBNT = idx.soBBNT!==-1? cleanExcelCode(r[idx.soBBNT]) : '';
-    const ngayLayMau = idx.ngayLayMau!==-1? excelToISODate(r[idx.ngayLayMau]) : '';
-    const nguoiLayMau = idx.nguoiLayMau!==-1? cleanExcelCode(r[idx.nguoiLayMau]) : '';
-    const soKQTN = idx.soKQTN!==-1? cleanExcelCode(r[idx.soKQTN]) : '';
-    const phongThiNghiem = idx.phongThiNghiem!==-1? cleanExcelCode(r[idx.phongThiNghiem]) : '';
-    const ngayCoKQTN = idx.ngayCoKQTN!==-1? excelToISODate(r[idx.ngayCoKQTN]) : '';
-    const mauQuantity = mode==='vldv'
-      ? (idx.khoiLuongMau!==-1? (parseFloat(r[idx.khoiLuongMau])||0) : 0)
-      : (idx.khoiLuong!==-1? (parseFloat(r[idx.khoiLuong])||0) : 0);
-
-    let sample = null;
-    if(soBBNT){
-      // Có Số BBNT trùng với tần suất đã nhập trước đó → cập nhật, tránh tạo trùng khi nhập lại file.
-      sample = samplesForGroup(mat.id, nhaCungCap).find(s=>s.sampleCode && normSupplierKey(s.sampleCode)===normSupplierKey(soBBNT));
-    }
-    if(sample){
-      report.samplesUpdated++;
-    } else {
-      const group = samplesForGroup(mat.id, nhaCungCap);
-      const nextIdx = group.length>0? group[group.length-1].freqIndex+1 : 1;
-      sample = {id:uid('smp'), materialId:mat.id, supplier:nhaCungCap, freqIndex:nextIdx, sampleCode:'', location:'', dateTaken:'', personTaken:'', quantity:'', soKQTN:'', phongThiNghiem:'', ngayKQTN:'', note:'', status:'chua_lay'};
-      DB.samples.push(sample);
-      report.samplesAdded++;
-    }
-    if(soBBNT) sample.sampleCode = soBBNT;
-    if(viTri) sample.location = viTri;
-    if(nguoiLayMau) sample.personTaken = nguoiLayMau;
-    if(ngayLayMau) sample.dateTaken = ngayLayMau;
-    if(soKQTN) sample.soKQTN = soKQTN;
-    if(phongThiNghiem) sample.phongThiNghiem = phongThiNghiem;
-    if(ngayCoKQTN) sample.ngayKQTN = ngayCoKQTN;
-    if(mauQuantity>0 && !sample.quantity) sample.quantity = mauQuantity;
-    if(ngayLayMau) sample.status = 'da_lay';
-  });
-  return report;
-}
-
-function renderExcel(main){
-  main.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Nhập từ Excel</h1>
-      <p class="page-desc">App tự quét qua toàn bộ các sheet trong file để tìm đúng bảng dữ liệu (kể cả khi tiêu đề không nằm ở dòng 1 hay sheet đầu tiên), tự nhận diện đây là file mẫu chuẩn của app hay file dạng "DATA_VLDV" nhiều sheet — mỗi dòng dữ liệu tương ứng đúng <b>1 tần suất</b>.</p>
-    </div>
-    <div class="card" id="xlsx-status-card" style="display:flex;align-items:center;gap:10px;"></div>
-    <div class="card">
-      <div class="card-title">1. Tải file mẫu Excel</div>
-      <p class="muted">Có sẵn tiêu đề đúng cột và 1-2 dòng ví dụ — bạn điền dữ liệu của mình vào các dòng bên dưới, giữ nguyên dòng tiêu đề.</p>
-      <button class="btn secondary" id="btn-template">⬇ Tải file mẫu Excel</button>
-    </div>
-    <div class="card">
-      <div class="card-title">2. Chọn file Excel để nhập</div>
-      <p class="muted">Hỗ trợ .xlsx, .xlsm, .xls. Dữ liệu trùng (cùng vật liệu, NCC, ngày, khối lượng / cùng Số BBNT) sẽ được cập nhật thay vì tạo trùng lặp — dữ liệu cũ trong app không bị xoá.</p>
-      <input type="file" id="excel-file" accept=".xlsx,.xls,.xlsm">
-      <div class="form-actions"><button class="btn" id="btn-import">Nhập dữ liệu vào app</button></div>
-      <div id="import-report"></div>
-    </div>
-  `;
-  const statusCard = main.querySelector('#xlsx-status-card');
-  function renderStatus(){
-    if(xlsxStatus==='loading'){
-      statusCard.innerHTML = `<span class="spinner" style="width:16px;height:16px;border-width:2px;margin:0;border-radius:50%;border:2px solid #E1DDC9;border-top-color:var(--navy-2);animation:spin .7s linear infinite;"></span><span class="muted">Đang tải thư viện đọc Excel...</span>`;
-    } else if(xlsxStatus==='ready'){
-      statusCard.innerHTML = `<span style="color:var(--green);font-weight:600;">✓ Sẵn sàng nhập Excel</span>`;
-    } else {
-      statusCard.innerHTML = `<span style="color:var(--red);font-weight:600;">✕ Không tải được thư viện Excel — kiểm tra kết nối mạng.</span> <button class="btn secondary small" id="xlsx-retry" style="margin-left:8px;">Thử lại</button>`;
-      main.querySelector('#xlsx-retry')?.addEventListener('click', ()=>{ setXlsxStatus('loading'); loadXlsxLib(); });
-    }
-  }
-  renderStatus();
-  onXlsxStatusChange(renderStatus);
-
-  function requireReady(){
-    if(xlsxStatus==='ready') return true;
-    showToast(xlsxStatus==='loading'? 'Thư viện đang tải, đợi vài giây rồi thử lại.' : 'Chưa tải được thư viện, bấm Thử lại ở trên.');
-    return false;
-  }
-  main.querySelector('#btn-template').addEventListener('click', ()=>{ if(requireReady()) downloadExcelTemplate(); });
-
-  const fileInput = main.querySelector('#excel-file');
-  const importBtn = main.querySelector('#btn-import');
-  importBtn.addEventListener('click', async ()=>{
-    if(!requireReady()) return;
-    const file = fileInput.files[0];
-    if(!file){ showToast('Vui lòng chọn một file Excel trước.'); return; }
-    importBtn.disabled = true; importBtn.textContent = 'Đang xử lý...';
-    try{
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, {type:'array', cellDates:true});
-      // Quét TẤT CẢ các sheet trong file (tiêu đề có thể không nằm ở sheet đầu tiên hay dòng đầu tiên —
-      // ví dụ file KCS-NTVL có 28 sheet, dữ liệu thật nằm ở sheet "DATA_VLDV", tiêu đề ở dòng 5).
-      let overallBest = {score:-1};
-      let bestSheetName = null, bestGrid = null;
-      wb.SheetNames.forEach(name=>{
-        const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
-        if(grid.length<2) return;
-        const found = findBestHeaderRow(grid);
-        if(found.score > overallBest.score){ overallBest = found; bestSheetName = name; bestGrid = grid; }
-      });
-      if(!bestSheetName || overallBest.score<3){
-        main.querySelector('#import-report').innerHTML = `<div class="card" style="margin-top:12px;"><div class="muted" style="color:var(--red);">Không tìm thấy sheet nào có cấu trúc cột phù hợp trong file này. Hãy dùng file mẫu ở bước 1 làm khuôn, hoặc kiểm tra lại tên các cột.</div></div>`;
-        importBtn.disabled = false; importBtn.textContent = 'Nhập dữ liệu vào app';
-        return;
-      }
-      const idx = overallBest.idx;
-      const mode = overallBest.mode;
-      const dataRows = bestGrid.slice(overallBest.rowIdx+1);
-      const report = importFromExcelRows(dataRows, idx, mode);
-      main.querySelector('#import-report').innerHTML = `
-        <div class="card" style="background:#FBFAF5;margin-top:12px;">
-          <div class="card-title">Kết quả nhập dữ liệu</div>
-          <p class="muted" style="margin:0 0 8px 0;">Đã nhận diện: sheet <b>${esc(bestSheetName)}</b>, dòng tiêu đề số <b>${overallBest.rowIdx+1}</b>, ${mode==='vldv'? 'chế độ <b>Thông tin lấy mẫu</b> (chỉ tạo tần suất, không tạo khối lượng nhập hàng)' : 'chế độ <b>mẫu chuẩn</b> (tạo cả khối lượng nhập hàng và tần suất)'}.</p>
-          <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.9;">
-            <li>Vật liệu mới tạo: <b>${report.materialsAdded}</b></li>
-            ${mode==='generic'? `<li>Đợt nhập hàng mới: <b>${report.lotsAdded}</b> — đã khớp với đợt có sẵn (không tạo trùng): <b>${report.lotsMatched}</b></li>` : ''}
-            <li>Tần suất mới thêm: <b>${report.samplesAdded}</b></li>
-            <li>Tần suất đã khớp Số BBNT có sẵn và cập nhật: <b>${report.samplesUpdated}</b></li>
-            <li>Dòng bị bỏ qua (thiếu dữ liệu / dòng tiêu đề nhóm / dòng lỗi công thức): <b>${report.skipped}</b></li>
-          </ul>
-        </div>
-      `;
-      persist();
-      showToast('Đã nhập dữ liệu từ Excel.');
-    }catch(e){
-      console.error(e);
-      showToast('Không đọc được file này — kiểm tra lại đây có đúng là file Excel hợp lệ không.');
-    }
-    importBtn.disabled = false; importBtn.textContent = 'Nhập dữ liệu vào app';
-    fileInput.value = '';
-  });
 }
 
 /* ==========================================================

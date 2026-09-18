@@ -121,6 +121,7 @@ const TABS = [
   {id:'lots', label:'Khối lượng nhập hàng', icon:'▦'},
   {id:'sampling', label:'Thông tin lấy mẫu vật liệu', icon:'●'},
   {id:'results', label:'Danh mục theo dõi lấy mẫu vật liệu', icon:'✓'},
+  {id:'excel', label:'Nhập từ Excel', icon:'⇅'},
 ];
 
 let DB = null;
@@ -139,6 +140,26 @@ function fmtQty(n){
   return rounded.toLocaleString('vi-VN', {maximumFractionDigits:2});
 }
 function freqLabel(n){ return 'Tần suất ' + String(n).padStart(2,'0'); }
+/** Shows the tần suất label a sample should display: the label parsed from Excel's "Tần suất"
+ *  column when available (handles combined ones like "Tần suất 2, Tần suất 3", or "Đầu vào" /
+ *  "Nghi ngờ"), otherwise falls back to the app's own auto-numbered "Tần suất 0X". */
+function sampleFreqLabel(s){ return s.freqLabelOverride? s.freqLabelOverride : freqLabel(s.freqIndex); }
+/** Parses labels like "TS1", "TS2, TS3", "TS5,TS6", "ĐV", "NN" from a project's own "Tần suất"
+ *  column into a spelled-out label such as "Tần suất 2, Tần suất 3". Unrecognized text is kept as-is. */
+function parseTanSuatLabel(raw){
+  const s = (raw||'').toString().trim();
+  if(!s) return '';
+  const upper = stripDiacritics(s).toUpperCase();
+  if(upper==='DV') return 'Đầu vào';
+  if(upper==='NN') return 'Nghi ngờ / thử lại';
+  const parts = s.split(',').map(p=>p.trim()).filter(Boolean);
+  if(parts.length===0) return '';
+  const labels = parts.map(p=>{
+    const m = p.match(/^TS\s*0*(\d+)$/i);
+    return m? ('Tần suất ' + parseInt(m[1],10)) : p;
+  });
+  return labels.join(', ');
+}
 
 function defaultData(){
   return {
@@ -306,6 +327,7 @@ function renderMain(){
   else if(state.tab==='lots') renderLots(main);
   else if(state.tab==='sampling') renderSampling(main);
   else if(state.tab==='results') renderResults(main);
+  else if(state.tab==='excel') renderExcel(main);
 }
 
 /* ---------- DASHBOARD ---------- */
@@ -372,7 +394,7 @@ function renderDashboard(main){
                 const daNghiemThu = !!(r.s.sampleCode && r.s.sampleCode.trim()!=='');
                 return `
                 <tr>
-                  <td><span class="freq-chip">${freqLabel(r.s.freqIndex)}</span></td>
+                  <td><span class="freq-chip">${sampleFreqLabel(r.s)}</span></td>
                   <td>${esc(r.s.supplier)||'—'}</td>
                   <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
                   <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
@@ -655,7 +677,7 @@ function renderSampling(main){
               const st = sampleStatus(s);
               return `
               <tr>
-                <td><span class="freq-chip">${freqLabel(s.freqIndex)}</span></td>
+                <td><span class="freq-chip">${sampleFreqLabel(s)}</span></td>
                 <td class="mono">${esc(s.sampleCode)||'—'}</td>
                 <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
                 <td>${esc(s.location)||'—'}</td>
@@ -695,7 +717,7 @@ function openSampleModal(id){
   const s = sampleById(id);
   const mat = materialById(s.materialId);
   openModal({
-    title: `Lấy mẫu — ${mat?mat.name:''} — ${esc(s.supplier)||'Chưa rõ NCC'} — ${freqLabel(s.freqIndex)}`,
+    title: `Lấy mẫu — ${mat?mat.name:''} — ${esc(s.supplier)||'Chưa rõ NCC'} — ${sampleFreqLabel(s)}`,
     focusId: 's-code',
     body: `
       <div class="grid2">
@@ -734,6 +756,316 @@ function openSampleModal(id){
       return true;
     }
   });
+}
+
+/* ==========================================================
+   EXCEL IMPORT — chỉ thêm tần suất MỚI, không bao giờ sửa/đè lên
+   dữ liệu đã có. Luồng bắt buộc: Xem trước (phân loại từng dòng
+   là "mới" hay "đã có sẵn") → người dùng bỏ chọn dòng không muốn →
+   Xác nhận mới thật sự ghi vào app.
+   ========================================================== */
+const XLSX_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+];
+let xlsxStatus = 'loading';
+let xlsxStatusListeners = [];
+function onXlsxStatusChange(fn){ xlsxStatusListeners.push(fn); }
+function setXlsxStatus(s){ xlsxStatus = s; xlsxStatusListeners.forEach(fn=>fn(s)); }
+function loadXlsxLib(sourceIndex){
+  sourceIndex = sourceIndex || 0;
+  if(typeof XLSX !== 'undefined'){ setXlsxStatus('ready'); return; }
+  if(sourceIndex >= XLSX_SOURCES.length){ setXlsxStatus('failed'); return; }
+  const s = document.createElement('script');
+  s.src = XLSX_SOURCES[sourceIndex];
+  s.onload = ()=>{ if(typeof XLSX !== 'undefined') setXlsxStatus('ready'); else loadXlsxLib(sourceIndex+1); };
+  s.onerror = ()=> loadXlsxLib(sourceIndex+1);
+  document.head.appendChild(s);
+}
+loadXlsxLib();
+
+const EXCEL_HEADER_MAP = {
+  vatLieuCol:['vatlieu','tenvatlieu'], nhaCungCap:['nhacungcap','ncc'],
+  viTri:['vitriphankhu','vitri','phankhu','vitrilaymau'],
+  soBBNT:['sobbnt','bbnt','mamau','ntvl'], ngayLayMau:['ngaylaymau'],
+  soKQTN:['sokqtn'], phongThiNghiem:['phongthinghiem','donvithinghiem'],
+  ngayCoKQTN:['ngaycokqtn','ngaycoketqua','ngaynt'], nguoiLayMau:['nguoilaymau'],
+  sttCol:['stt'], khoiLuongMau:['kllaymau'], tanSuatCol:['tansuat']
+};
+function normKey(h){ return stripDiacritics(String(h||'')).toLowerCase().replace(/[^a-z0-9]/g,''); }
+function stripDiacritics(str){ return str.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D'); }
+function mapExcelHeaders(headers){
+  const norm = headers.map(normKey);
+  const out = {};
+  Object.keys(EXCEL_HEADER_MAP).forEach(field=>{
+    let idx=-1;
+    for(const c of EXCEL_HEADER_MAP[field]){ idx = norm.indexOf(c); if(idx!==-1) break; }
+    out[field]=idx;
+  });
+  return out;
+}
+/** Scans the first ~15 rows of a sheet for the row that best matches our known headers —
+ *  real project exports don't always put headers on row 1. */
+function findBestHeaderRow(grid){
+  let best = {rowIdx:-1, idx:null, score:-1};
+  const maxScan = Math.min(grid.length, 15);
+  for(let r=0;r<maxScan;r++){
+    const headers = grid[r];
+    if(!headers || headers.every(h=>!h)) continue;
+    const idx = mapExcelHeaders(headers);
+    let score = 0;
+    ['vatLieuCol','nhaCungCap','soBBNT','ngayLayMau','soKQTN','phongThiNghiem','viTri','ngayCoKQTN'].forEach(f=>{ if(idx[f]!==-1) score++; });
+    if(score>best.score){ best = {rowIdx:r, idx, score}; }
+  }
+  return best;
+}
+function cleanExcelCode(v){
+  if(v===undefined||v===null||v==='') return '';
+  if(typeof v==='number' && v===0) return '';
+  const s = String(v).trim();
+  if(/^0{1,2}:0{2}:0{2}$/.test(s)) return '';
+  if(/^1899-12-30|^1900-01-0[01]/.test(s)) return '';
+  return s;
+}
+/** "Vật liệu - Nhà cung cấp - ... - Tần suất N" style concatenated labels: keep just the material name. */
+function extractMaterialName(raw){
+  let s = (raw||'').toString().trim();
+  if(!s) return '';
+  s = s.split(/\s[-–—]\s/)[0].trim();
+  s = s.replace(/-\s*(Tần\s*suất|Công\s*ty|Cty)\b.*$/i, '').trim();
+  return s;
+}
+function excelToISODate(v){
+  if(v===undefined||v===null||v==='') return '';
+  if(v instanceof Date && !isNaN(v)){
+    const y=v.getFullYear(), m=String(v.getMonth()+1).padStart(2,'0'), d=String(v.getDate()).padStart(2,'0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(v).trim();
+  if(/^\d{4}-\d{1,2}-\d{1,2}/.test(s)){ const [y,m,d]=s.split('-'); return `${y}-${m.padStart(2,'0')}-${d.slice(0,2).padStart(2,'0')}`; }
+  if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){ const [d,m,y]=s.split('/'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; }
+  return '';
+}
+function findOrCreateMaterialByName(name, willCreateSet){
+  name = (name||'').toString().trim();
+  if(!name) return null;
+  let mat = DB.materials.find(m=>normSupplierKey(m.name)===normSupplierKey(name));
+  if(!mat){ mat = {id:uid('mat'), name, unit:'', freqQty:0, freqNote:'', criteria:[]}; if(willCreateSet) willCreateSet.add(name); }
+  return mat;
+}
+
+/** Reads the file and classifies every usable row as 'new' (would be added) or 'duplicate'
+ *  (matches an existing tần suất by Số BBNT within the same vật liệu+nhà cung cấp — will be
+ *  skipped automatically, never overwritten). Nothing is written to DB at this stage. */
+async function parseExcelForPreview(file){
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array', cellDates:true});
+  let overallBest = {score:-1};
+  let bestSheetName = null, bestGrid = null;
+  wb.SheetNames.forEach(name=>{
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
+    if(grid.length<2) return;
+    const found = findBestHeaderRow(grid);
+    if(found.score > overallBest.score){ overallBest = found; bestSheetName = name; bestGrid = grid; }
+  });
+  if(!bestSheetName || overallBest.score<3){
+    return { ok:false, message:'Không tìm thấy sheet nào có cấu trúc cột phù hợp (cần ít nhất cột Vật liệu, Nhà cung cấp và một vài cột khác như Số BBNT, Ngày lấy mẫu...).' };
+  }
+  const idx = overallBest.idx;
+  const rows = bestGrid.slice(overallBest.rowIdx+1);
+  const willCreateMaterials = new Set();
+  const seenInFile = new Set(); // guards against duplicate rows within the same file
+  const items = [];
+  rows.forEach(r=>{
+    const sttVal = idx.sttCol!==-1? r[idx.sttCol] : null;
+    if(idx.sttCol!==-1 && (sttVal===null||sttVal===undefined||sttVal==='')) return;
+    const vatLieuName = extractMaterialName(idx.vatLieuCol!==-1? r[idx.vatLieuCol] : '');
+    const nhaCungCap = idx.nhaCungCap!==-1? cleanExcelCode(r[idx.nhaCungCap]) : '';
+    if(!vatLieuName || !nhaCungCap || /^\d+(\.\d+)?$/.test(vatLieuName) || vatLieuName.includes('#REF') || nhaCungCap.includes('#REF')) return;
+
+    const soBBNT = idx.soBBNT!==-1? cleanExcelCode(r[idx.soBBNT]) : '';
+    const viTri = idx.viTri!==-1? cleanExcelCode(r[idx.viTri]) : '';
+    const nguoiLayMau = idx.nguoiLayMau!==-1? cleanExcelCode(r[idx.nguoiLayMau]) : '';
+    const ngayLayMau = idx.ngayLayMau!==-1? excelToISODate(r[idx.ngayLayMau]) : '';
+    const soKQTN = idx.soKQTN!==-1? cleanExcelCode(r[idx.soKQTN]) : '';
+    const phongThiNghiem = idx.phongThiNghiem!==-1? cleanExcelCode(r[idx.phongThiNghiem]) : '';
+    const ngayCoKQTN = idx.ngayCoKQTN!==-1? excelToISODate(r[idx.ngayCoKQTN]) : '';
+    const quantity = idx.khoiLuongMau!==-1? (parseFloat(r[idx.khoiLuongMau])||0) : 0;
+    const freqLabelOverride = idx.tanSuatCol!==-1? parseTanSuatLabel(r[idx.tanSuatCol]) : '';
+
+    const mat = findOrCreateMaterialByName(vatLieuName, willCreateMaterials);
+    const groupKey = mat.id+'|'+normSupplierKey(nhaCungCap);
+
+    let status = 'new', reason = '';
+    if(soBBNT){
+      const dupKey = groupKey+'|'+normSupplierKey(soBBNT);
+      const existsInApp = samplesForGroup(mat.id, nhaCungCap).some(s=>s.sampleCode && normSupplierKey(s.sampleCode)===normSupplierKey(soBBNT));
+      if(existsInApp){ status='duplicate'; reason='Đã có Số BBNT này trong app'; }
+      else if(seenInFile.has(dupKey)){ status='duplicate'; reason='Trùng lặp trong chính file này'; }
+      else seenInFile.add(dupKey);
+    }
+    items.push({
+      status, reason, vatLieuName, nhaCungCap, soBBNT, viTri, nguoiLayMau,
+      ngayLayMau, soKQTN, phongThiNghiem, ngayCoKQTN, quantity, freqLabelOverride, materialId: mat.id, selected: status==='new'
+    });
+  });
+  return { ok:true, sheetName:bestSheetName, headerRowNum:overallBest.rowIdx+1, items, willCreateMaterials:[...willCreateMaterials] };
+}
+
+function commitExcelPreview(items){
+  const report = { materialsAdded:0, samplesAdded:0 };
+  items.filter(it=>it.selected && it.status==='new').forEach(it=>{
+    const matBefore = DB.materials.length;
+    const mat = findOrCreateMaterialByName(it.vatLieuName);
+    if(!DB.materials.find(m=>m.id===mat.id)){ DB.materials.push(mat); }
+    if(DB.materials.length>matBefore) report.materialsAdded++;
+    const group = samplesForGroup(mat.id, it.nhaCungCap);
+    const nextIdx = group.length>0? group[group.length-1].freqIndex+1 : 1;
+    const sample = {
+      id:uid('smp'), materialId:mat.id, supplier:it.nhaCungCap, freqIndex:nextIdx,
+      sampleCode:it.soBBNT, location:it.viTri, dateTaken:it.ngayLayMau, personTaken:it.nguoiLayMau,
+      quantity: it.quantity>0? it.quantity : '', soKQTN:it.soKQTN, phongThiNghiem:it.phongThiNghiem,
+      ngayKQTN:it.ngayCoKQTN, note:'', freqLabelOverride: it.freqLabelOverride||'', status: it.ngayLayMau? 'da_lay':'chua_lay'
+    };
+    DB.samples.push(sample);
+    report.samplesAdded++;
+  });
+  return report;
+}
+
+function renderExcel(main){
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Nhập từ Excel</h1>
+      <p class="page-desc">Chỉ thêm những dòng <b>hoàn toàn mới</b> — dữ liệu đã có trong app sẽ không bao giờ bị sửa hay ghi đè. Bạn xem trước danh sách, bỏ chọn dòng nào không muốn, rồi mới bấm xác nhận để lưu.</p>
+    </div>
+    <div class="card" id="xlsx-status-card" style="display:flex;align-items:center;gap:10px;"></div>
+    <div class="card">
+      <div class="card-title">1. Chọn file Excel</div>
+      <p class="muted">App tự quét mọi sheet trong file để tìm đúng bảng dữ liệu, tự nhận diện các cột: Vật liệu, Nhà cung cấp, Số BBNT, Vị trí, Người lấy mẫu, Ngày lấy mẫu, Số KQTN, Phòng/Đơn vị thí nghiệm, Ngày có KQTN.</p>
+      <input type="file" id="excel-file" accept=".xlsx,.xls,.xlsm">
+      <div class="form-actions"><button class="btn" id="btn-preview">Xem trước</button></div>
+    </div>
+    <div id="preview-area"></div>
+  `;
+  const statusCard = main.querySelector('#xlsx-status-card');
+  function renderStatus(){
+    if(xlsxStatus==='loading'){
+      statusCard.innerHTML = `<span class="spinner" style="width:16px;height:16px;border-width:2px;margin:0;border-radius:50%;border:2px solid #E1DDC9;border-top-color:var(--navy-2);animation:spin .7s linear infinite;"></span><span class="muted">Đang tải thư viện đọc Excel...</span>`;
+    } else if(xlsxStatus==='ready'){
+      statusCard.innerHTML = `<span style="color:var(--green);font-weight:600;">✓ Sẵn sàng đọc Excel</span>`;
+    } else {
+      statusCard.innerHTML = `<span style="color:var(--red);font-weight:600;">✕ Không tải được thư viện Excel — kiểm tra kết nối mạng.</span> <button class="btn secondary small" id="xlsx-retry" style="margin-left:8px;">Thử lại</button>`;
+      main.querySelector('#xlsx-retry')?.addEventListener('click', ()=>{ setXlsxStatus('loading'); loadXlsxLib(); });
+    }
+  }
+  renderStatus();
+  onXlsxStatusChange(renderStatus);
+  function requireReady(){
+    if(xlsxStatus==='ready') return true;
+    showToast(xlsxStatus==='loading'? 'Thư viện đang tải, đợi vài giây rồi thử lại.' : 'Chưa tải được thư viện, bấm Thử lại ở trên.');
+    return false;
+  }
+
+  const fileInput = main.querySelector('#excel-file');
+  const previewBtn = main.querySelector('#btn-preview');
+  const previewArea = main.querySelector('#preview-area');
+  let currentItems = null;
+
+  previewBtn.addEventListener('click', async ()=>{
+    if(!requireReady()) return;
+    const file = fileInput.files[0];
+    if(!file){ showToast('Vui lòng chọn một file Excel trước.'); return; }
+    previewBtn.disabled = true; previewBtn.textContent = 'Đang đọc...';
+    try{
+      const result = await parseExcelForPreview(file);
+      previewBtn.disabled = false; previewBtn.textContent = 'Xem trước';
+      if(!result.ok){ previewArea.innerHTML = `<div class="card"><div class="muted" style="color:var(--red);">${esc(result.message)}</div></div>`; return; }
+      currentItems = result.items;
+      renderPreview(result);
+    }catch(e){
+      console.error(e);
+      previewBtn.disabled = false; previewBtn.textContent = 'Xem trước';
+      showToast('Không đọc được file này — kiểm tra lại đây có đúng là file Excel hợp lệ không.');
+    }
+  });
+
+  function renderPreview(result){
+    const newItems = currentItems.filter(it=>it.status==='new');
+    const dupItems = currentItems.filter(it=>it.status==='duplicate');
+    previewArea.innerHTML = `
+      <div class="card">
+        <div class="card-title">2. Xem trước &amp; chọn lọc <span class="muted" style="font-weight:400;">Sheet "${esc(result.sheetName)}", dòng tiêu đề số ${result.headerRowNum}</span></div>
+        <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+          <div class="stat green"><div class="stat-num">${newItems.length}</div><div class="stat-label">Dòng mới — sẽ thêm</div></div>
+          <div class="stat" style="border-color:var(--line)"><div class="stat-num" style="color:var(--slate)">${dupItems.length}</div><div class="stat-label">Đã có sẵn — tự bỏ qua</div></div>
+          <div class="stat amber"><div class="stat-num">${result.willCreateMaterials.length}</div><div class="stat-label">Vật liệu mới sẽ tạo</div></div>
+        </div>
+        ${newItems.length===0? `<div class="empty">Không có dòng mới nào để thêm — mọi dữ liệu trong file có vẻ đã có sẵn trong app rồi.</div>` : `
+        <div class="row-flex" style="margin-bottom:10px;">
+          <button class="btn secondary small" id="sel-all">Chọn tất cả</button>
+          <button class="btn secondary small" id="sel-none">Bỏ chọn tất cả</button>
+        </div>
+        <table>
+          <thead><tr><th></th><th>Tần suất</th><th>Vật liệu</th><th>Nhà cung cấp</th><th>Số BBNT</th><th>Ngày lấy mẫu</th><th>Số KQTN</th><th>Phòng TN</th></tr></thead>
+          <tbody>
+            ${newItems.map((it,i)=>`
+              <tr>
+                <td><input type="checkbox" class="chk new-item-chk" data-i="${currentItems.indexOf(it)}" ${it.selected?'checked':''}></td>
+                <td>${it.freqLabelOverride? `<span class="freq-chip">${esc(it.freqLabelOverride)}</span>` : '<span class="muted">tự đánh số</span>'}</td>
+                <td>${esc(it.vatLieuName)}</td>
+                <td>${esc(it.nhaCungCap)}</td>
+                <td class="mono">${esc(it.soBBNT)||'—'}</td>
+                <td>${esc(it.ngayLayMau)||'—'}</td>
+                <td class="mono">${esc(it.soKQTN)||'—'}</td>
+                <td class="muted">${esc(it.phongThiNghiem)||'—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+        <div class="form-actions"><button class="btn" id="btn-confirm">Xác nhận thêm dữ liệu đã chọn</button></div>
+        `}
+        ${dupItems.length>0? `
+        <details style="margin-top:14px;">
+          <summary class="muted" style="cursor:pointer;">Xem ${dupItems.length} dòng đã bỏ qua vì đã có sẵn</summary>
+          <table style="margin-top:8px;">
+            <thead><tr><th>Vật liệu</th><th>Nhà cung cấp</th><th>Số BBNT</th><th>Lý do bỏ qua</th></tr></thead>
+            <tbody>
+              ${dupItems.map(it=>`<tr><td>${esc(it.vatLieuName)}</td><td>${esc(it.nhaCungCap)}</td><td class="mono">${esc(it.soBBNT)||'—'}</td><td class="muted">${esc(it.reason)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </details>` : ''}
+      </div>
+      <div id="commit-report"></div>
+    `;
+    previewArea.querySelector('#sel-all')?.addEventListener('click', ()=>{
+      previewArea.querySelectorAll('.new-item-chk').forEach(c=>{ c.checked=true; currentItems[+c.dataset.i].selected=true; });
+    });
+    previewArea.querySelector('#sel-none')?.addEventListener('click', ()=>{
+      previewArea.querySelectorAll('.new-item-chk').forEach(c=>{ c.checked=false; currentItems[+c.dataset.i].selected=false; });
+    });
+    previewArea.querySelectorAll('.new-item-chk').forEach(c=>{
+      c.addEventListener('change', ()=>{ currentItems[+c.dataset.i].selected = c.checked; });
+    });
+    previewArea.querySelector('#btn-confirm')?.addEventListener('click', ()=>{
+      const selectedCount = currentItems.filter(it=>it.selected && it.status==='new').length;
+      if(selectedCount===0){ showToast('Chưa chọn dòng nào để thêm.'); return; }
+      if(!confirm(`Thêm ${selectedCount} tần suất mới vào app? Dữ liệu đã có sẵn sẽ không bị thay đổi.`)) return;
+      const report = commitExcelPreview(currentItems);
+      previewArea.querySelector('#commit-report').innerHTML = `
+        <div class="card" style="background:#FBFAF5;">
+          <div class="card-title">Đã cập nhật</div>
+          <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.9;">
+            <li>Vật liệu mới tạo: <b>${report.materialsAdded}</b></li>
+            <li>Tần suất mới đã thêm vào app: <b>${report.samplesAdded}</b></li>
+          </ul>
+        </div>`;
+      persist();
+      showToast('Đã thêm dữ liệu vào app.');
+      fileInput.value = '';
+      currentItems = null;
+    });
+  }
 }
 
 /* ---------- DANH MỤC THEO DÕI (chỉ đọc, lấy dữ liệu từ phần Lấy mẫu) ---------- */
@@ -791,7 +1123,7 @@ function renderResults(main){
               const daNghiemThu = !!(s.sampleCode && s.sampleCode.trim()!=='');
               return `
               <tr>
-                <td><span class="freq-chip">${freqLabel(s.freqIndex)}</span></td>
+                <td><span class="freq-chip">${sampleFreqLabel(s)}</span></td>
                 <td>${esc(s.supplier)||'—'}</td>
                 <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
                 <td>${daNghiemThu? `<span class="mono">${esc(s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>

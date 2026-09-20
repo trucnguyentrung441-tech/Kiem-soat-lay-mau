@@ -491,7 +491,6 @@ function openMaterialModal(id){
       m.freqNote = val('m-freqnote');
       m.criteria = document.getElementById('m-criteria').value.split('\\n').map(x=>x.trim()).filter(Boolean);
       if(!id) DB.materials.push(m);
-      materialSupplierGroupsInUse().filter(g=>g.materialId===m.id).forEach(g=>ensureSlotsForGroup(g.materialId, g.supplier));
       persist();
       return true;
     }
@@ -553,10 +552,8 @@ function renderLots(main){
   main.querySelectorAll('[data-editlot]').forEach(b=>b.addEventListener('click',()=>openLotModal(b.dataset.editlot)));
   main.querySelectorAll('[data-dellot]').forEach(b=>b.addEventListener('click',()=>{
     const id=b.dataset.dellot;
-    const lot = lotById(id);
-    if(confirm('Xoá đợt nhập hàng này? Khối lượng của nhóm vật liệu + nhà cung cấp tương ứng sẽ giảm xuống — nếu nhờ đó tần suất cần lấy giảm theo, các tần suất CHƯA lấy mẫu dư ra sẽ được rút bớt (tần suất đã lấy mẫu luôn được giữ lại).')){
+    if(confirm('Xoá đợt nhập hàng này?')){
       DB.lots = DB.lots.filter(l=>l.id!==id);
-      if(lot) ensureSlotsForGroup(lot.materialId, lot.supplier);
       persist();
       showToast('Đã xoá đợt nhập hàng.');
     }
@@ -598,14 +595,12 @@ function openLotModal(id){
         const existingTotal = otherLots.reduce((a,x)=>a+(parseFloat(x.quantity)||0),0);
         const newTotal = existingTotal + qty;
         const existingCount = samplesForGroup(materialId, supplier).length;
-        let required;
+        let required = null;
         if(mat && mat.freqQty>0) required = Math.max(1, Math.ceil(newTotal/mat.freqQty));
-        else required = Math.max(1, otherLots.length+1);
-        const diff = required - existingCount;
-        preview.innerHTML = `Nhóm <b>"${mat?esc(mat.name):''} — ${esc(supplier)||'chưa rõ NCC'}"</b> sau khi lưu: tổng khối lượng <b>${newTotal}</b> ${mat?esc(mat.unit):''} → cần <b>${required}</b> tần suất`
-          + (mat&&mat.freqQty>0? ` (định mức ${fmtQty(mat.freqQty)} ${esc(mat.unit)}/mẫu)` : ' (vật liệu chưa có định mức, tạm tính 1 tần suất/đợt)')
-          + `. Hiện nhóm đang có ${existingCount} tần suất — `
-          + (diff>0? `sẽ <b>thêm ${diff}</b> tần suất mới, đánh số tiếp theo.` : diff<0? `dư ${-diff} tần suất (chỉ rút bớt các tần suất chưa lấy mẫu).` : `đã đủ, không đổi.`);
+        preview.innerHTML = `Nhóm <b>"${mat?esc(mat.name):''} — ${esc(supplier)||'chưa rõ NCC'}"</b> sau khi lưu: tổng khối lượng <b>${newTotal}</b> ${mat?esc(mat.unit):''}`
+          + (required!==null? ` → theo định mức thì cần khoảng <b>${required}</b> tần suất (${fmtQty(mat.freqQty)} ${esc(mat.unit)}/mẫu)` : '')
+          + `. Hiện nhóm đang có <b>${existingCount}</b> tần suất trong tab "Thông tin lấy mẫu vật liệu".`
+          + ` <span class="muted">Lưu khối lượng KHÔNG tự tạo tần suất mới — vào tab "Thông tin lấy mẫu vật liệu" để tạo tần suất bằng tay hoặc nhập từ Excel.</span>`;
       }
       matSel.addEventListener('change', updatePreview);
       qtyInput.addEventListener('input', updatePreview);
@@ -617,7 +612,6 @@ function openLotModal(id){
       const quantity = parseFloat(document.getElementById('l-qty').value) || 0;
       if(quantity<=0){ showToast('Vui lòng nhập khối lượng lớn hơn 0'); return false; }
       const mat = materialById(materialId);
-      const oldMaterialId = l.materialId, oldSupplier = l.supplier;
       l.materialId = materialId;
       l.name = `${mat?mat.name:'Vật liệu'} — ${document.getElementById('l-date').value || 'chưa có ngày'}`;
       l.supplier = val('l-supplier');
@@ -625,12 +619,6 @@ function openLotModal(id){
       l.quantity = quantity;
       l.startDate = document.getElementById('l-date').value;
       if(!id) DB.lots.push(l);
-      // Recompute slots for the (possibly new) group this lot now belongs to...
-      ensureSlotsForGroup(l.materialId, l.supplier);
-      // ...and also for its old group, in case editing moved it to a different vật liệu/nhà cung cấp.
-      if(id && (oldMaterialId!==l.materialId || normSupplierKey(oldSupplier)!==normSupplierKey(l.supplier))){
-        ensureSlotsForGroup(oldMaterialId, oldSupplier);
-      }
       persist();
       return true;
     }
@@ -643,7 +631,10 @@ function renderSampling(main){
   main.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Thông tin lấy mẫu vật liệu</h1>
-      <p class="page-desc">Tần suất được gộp chung và đánh số liên tục theo từng nhóm vật liệu + nhà cung cấp, không tách riêng theo từng đợt nhập hàng.</p>
+      <p class="page-desc">Tần suất được gộp chung và đánh số liên tục theo từng nhóm vật liệu + nhà cung cấp, không tách riêng theo từng đợt nhập hàng. Tần suất chỉ được tạo khi bạn bấm "Tạo tần suất mới" hoặc nhập từ Excel — nhập khối lượng ở tab "Khối lượng nhập hàng" không còn tự tạo tần suất nữa.</p>
+    </div>
+    <div class="row-flex" style="margin-bottom:14px;">
+      <button class="btn" id="btn-new-freq" ${DB.materials.length===0?'disabled':''}>+ Tạo tần suất mới</button>
     </div>
     ${aggs.length>0? `
     <div class="card">
@@ -701,6 +692,7 @@ function renderSampling(main){
   `;
   main.querySelectorAll('[data-samp]').forEach(b=>b.addEventListener('click',()=>openSampleModal(b.dataset.samp)));
   main.querySelectorAll('[data-delsamp]').forEach(b=>b.addEventListener('click',()=>deleteSample(b.dataset.delsamp)));
+  main.querySelector('#btn-new-freq')?.addEventListener('click', ()=>openNewFrequencyModal());
 }
 function deleteSample(sampleId){
   const s = sampleById(sampleId);
@@ -712,6 +704,62 @@ function deleteSample(sampleId){
   samplesForGroup(materialId, supplier).forEach((r,idx)=>{ r.freqIndex = idx+1; });
   persist();
   showToast('Đã xoá.');
+}
+/** Lets the user create a brand-new tần suất by hand — for a chosen vật liệu + nhà cung cấp,
+ *  not tied to any đợt nhập hàng's khối lượng. */
+function openNewFrequencyModal(){
+  openModal({
+    title: 'Tạo tần suất mới',
+    focusId: 'nf-supplier',
+    body: `
+      <div class="grid2">
+        <div><label>Vật liệu</label>
+          <select id="nf-mat">${DB.materials.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select>
+        </div>
+        <div><label>Nhà cung cấp</label><input type="text" id="nf-supplier" list="dl-suppliers-nf" placeholder="VD: Công ty CP VLXD ABC"></div>
+      </div>
+      <datalist id="dl-suppliers-nf">${distinctSuppliers().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
+      <div class="grid2">
+        <div><label>Số BBNT</label><input type="text" id="nf-code" placeholder="VD: BBNT-01"></div>
+        <div><label>Khối lượng đại diện</label><input type="text" id="nf-qty" placeholder="VD: 500 m³"></div>
+      </div>
+      <div class="grid2">
+        <div><label>Ngày lấy mẫu</label><input type="date" id="nf-date"></div>
+        <div><label>Người lấy mẫu</label><input type="text" id="nf-person"></div>
+      </div>
+      <label>Vị trí lấy mẫu</label>
+      <input type="text" id="nf-loc" placeholder="VD: Lý trình Km0+120, tim tuyến">
+      <div class="grid2">
+        <div><label>Số KQTN</label><input type="text" id="nf-sokqtn" placeholder="VD: KQTN-001"></div>
+        <div><label>Phòng thí nghiệm</label><input type="text" id="nf-lab" placeholder="Tên phòng LAS-XD..."></div>
+      </div>
+      <div class="grid2">
+        <div><label>Ngày có KQTN</label><input type="date" id="nf-ngaykqtn"></div>
+      </div>
+      <label>Ghi chú</label>
+      <textarea id="nf-note"></textarea>
+    `,
+    onSave: ()=>{
+      const materialId = document.getElementById('nf-mat').value;
+      const supplier = val('nf-supplier');
+      if(!materialId){ showToast('Vui lòng chọn vật liệu'); return false; }
+      if(!supplier){ showToast('Vui lòng nhập nhà cung cấp'); return false; }
+      const group = samplesForGroup(materialId, supplier);
+      const nextIdx = group.length>0? group[group.length-1].freqIndex+1 : 1;
+      const s = {
+        id:uid('smp'), materialId, supplier, freqIndex:nextIdx,
+        sampleCode: val('nf-code'), quantity: val('nf-qty'),
+        dateTaken: document.getElementById('nf-date').value, personTaken: val('nf-person'),
+        location: val('nf-loc'), soKQTN: val('nf-sokqtn'), phongThiNghiem: val('nf-lab'),
+        ngayKQTN: document.getElementById('nf-ngaykqtn').value, note: val('nf-note'), freqLabelOverride:'',
+        status: document.getElementById('nf-date').value? 'da_lay':'chua_lay'
+      };
+      DB.samples.push(s);
+      persist();
+      showToast('Đã tạo tần suất mới.');
+      return true;
+    }
+  });
 }
 function openSampleModal(id){
   const s = sampleById(id);

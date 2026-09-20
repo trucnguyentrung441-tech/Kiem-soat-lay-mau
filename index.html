@@ -503,7 +503,7 @@ function distinctSuppliers(){
   return [...new Set(DB.lots.map(l=>l.supplier).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 }
 function renderLots(main){
-  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier));
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier)).filter(a=>a.mat); // bỏ qua nhóm mồ côi (vật liệu đã bị xoá) để tránh sập trang
   main.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Khối lượng nhập hàng về</h1>
@@ -639,7 +639,7 @@ function openLotModal(id){
 
 /* ---------- SAMPLING ---------- */
 function renderSampling(main){
-  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier));
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier)).filter(a=>a.mat); // bỏ qua nhóm mồ côi (vật liệu đã bị xoá) để tránh sập trang
   main.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Thông tin lấy mẫu vật liệu</h1>
@@ -1071,7 +1071,7 @@ function renderExcel(main){
 /* ---------- DANH MỤC THEO DÕI (chỉ đọc, lấy dữ liệu từ phần Lấy mẫu) ---------- */
 function renderResults(main){
   const takenSamples = DB.samples.filter(s=>s.status!=='chua_lay');
-  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier));
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier)).filter(a=>a.mat); // bỏ qua nhóm mồ côi (vật liệu đã bị xoá) để tránh sập trang
   const groupMap = {};
   takenSamples.forEach(s=>{
     const mat = s.materialId? materialById(s.materialId) : null;

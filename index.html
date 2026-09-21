@@ -330,6 +330,25 @@ function renderMain(){
   else if(state.tab==='excel') renderExcel(main);
 }
 
+/** Materials that have at least one đợt nhập hàng or tần suất, used for the Tổng quan roll-up. */
+function materialsInUseForDashboard(){
+  const ids = new Set();
+  DB.lots.forEach(l=>ids.add(l.materialId));
+  DB.samples.forEach(s=>{ if(s.materialId) ids.add(s.materialId); });
+  return [...ids].map(id=>materialById(id)).filter(Boolean);
+}
+/** Same idea as aggregateForGroup but summed across every nhà cung cấp — a material-level total. */
+function aggregateForMaterialOnly(materialId){
+  const mat = materialById(materialId);
+  const lots = DB.lots.filter(l=>l.materialId===materialId);
+  const totalQty = lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
+  const allSamples = DB.samples.filter(s=>s.materialId===materialId);
+  const taken = allSamples.filter(s=>s.status!=='chua_lay').length;
+  const requiredTotal = (mat && mat.freqQty>0) ? Math.max(1, Math.ceil(totalQty/mat.freqQty)) : null;
+  const remaining = requiredTotal===null ? null : Math.max(0, requiredTotal-taken);
+  return { mat, totalQty, requiredTotal, taken, remaining };
+}
+
 /* ---------- DASHBOARD ---------- */
 function renderDashboard(main){
   const all = DB.samples;
@@ -349,11 +368,13 @@ function renderDashboard(main){
 
   const groupMap = {};
   rows.forEach(r=>{
-    const key = r.mat? r.mat.id : '_khac';
+    if(!r.mat) return; // dữ liệu mồ côi (vật liệu đã bị xoá) — ẩn hẳn, không hiện "Vật liệu khác"
+    const key = r.mat.id;
     if(!groupMap[key]) groupMap[key] = { mat:r.mat, items:[] };
     groupMap[key].items.push(r);
   });
   const groups = Object.values(groupMap).sort((a,b)=> (a.mat?a.mat.name:'').localeCompare(b.mat?b.mat.name:''));
+  const matAggs = materialsInUseForDashboard().map(m=>aggregateForMaterialOnly(m.id));
 
   main.innerHTML = `
     <div class="page-header">
@@ -366,6 +387,22 @@ function renderDashboard(main){
       <div class="stat" style="border-color:var(--line)"><div class="stat-num" style="color:var(--slate)">${taken}</div><div class="stat-label">Đã lấy mẫu — chưa KQTN</div></div>
       <div class="stat green"><div class="stat-num">${hasKQTN}</div><div class="stat-label">Đã có KQTN</div></div>
     </div>
+    ${matAggs.length>0? `
+    <div class="card">
+      <div class="card-title">Khối lượng &amp; tần suất theo vật liệu <span class="muted" style="font-weight:400;">Gộp mọi nhà cung cấp — riêng biệt với bảng chi tiết bên dưới</span></div>
+      <table>
+        <thead><tr><th>Vật liệu</th><th>Tổng khối lượng đã về</th><th>Đã lấy tần suất</th><th>Còn lại chưa lấy</th></tr></thead>
+        <tbody>
+          ${matAggs.map(a=>`
+            <tr>
+              <td>${esc(a.mat.name)}</td>
+              <td class="mono">${fmtQty(a.totalQty)} ${esc(a.mat.unit)}</td>
+              <td class="mono">${a.taken}</td>
+              <td>${a.remaining===null? `<span class="muted">Chưa có định mức</span>` : a.remaining>0? `<span class="badge pending">Còn ${a.remaining}</span>` : `<span class="badge pass">Đã đủ</span>`}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
     <div class="card">
       <div class="card-title">Bảng theo dõi chi tiết</div>
       <div class="filter-bar">
@@ -386,7 +423,7 @@ function renderDashboard(main){
         const items = g.items.slice().sort((a,b)=> (a.s.supplier||'').localeCompare(b.s.supplier||'') || a.s.freqIndex-b.s.freqIndex);
         return `
         <div class="card">
-          <div class="card-title">${g.mat?esc(g.mat.name):'Vật liệu khác'} <span class="muted" style="font-weight:400;">${items.length} tần suất</span></div>
+          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${items.length} tần suất</span></div>
           <table>
             <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
             <tbody>
@@ -1123,7 +1160,8 @@ function renderResults(main){
   const groupMap = {};
   takenSamples.forEach(s=>{
     const mat = s.materialId? materialById(s.materialId) : null;
-    const key = mat? mat.id : '_khac';
+    if(!mat) return; // dữ liệu mồ côi (vật liệu đã bị xoá) — ẩn hẳn, không hiện "Vật liệu khác"
+    const key = mat.id;
     if(!groupMap[key]) groupMap[key] = { mat, items: [] };
     groupMap[key].items.push(s);
   });
@@ -1162,7 +1200,7 @@ function renderResults(main){
         const hasKQTN = items.filter(s=>sampleStatus(s).key==='pass').length;
         return `
         <div class="card">
-          <div class="card-title">${g.mat?esc(g.mat.name):'Vật liệu khác'} <span class="muted" style="font-weight:400;">${items.length} tần suất · ${hasKQTN} đã có KQTN</span></div>
+          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${items.length} tần suất · ${hasKQTN} đã có KQTN</span></div>
           <table>
             <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái KQTN</th></tr></thead>
             <tbody>

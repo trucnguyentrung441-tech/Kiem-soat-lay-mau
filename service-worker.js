@@ -29,8 +29,6 @@ self.addEventListener('fetch', (event) => {
   const isPage = event.request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname.endsWith('/');
 
   if (isPage) {
-    // Network-first for the app page itself, so updates you upload to GitHub
-    // always show up immediately. Falls back to the cached copy only when offline.
     event.respondWith(
       fetch(event.request)
         .then((response) => {
@@ -43,7 +41,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for static assets (icons, manifest) — these rarely change and load instantly.
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -55,4 +52,3 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
-

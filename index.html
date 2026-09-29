@@ -144,6 +144,17 @@ function freqLabel(n){ return 'Tần suất ' + String(n).padStart(2,'0'); }
  *  column when available (handles combined ones like "Tần suất 2, Tần suất 3", or "Đầu vào" /
  *  "Nghi ngờ"), otherwise falls back to the app's own auto-numbered "Tần suất 0X". */
 function sampleFreqLabel(s){ return s.freqLabelOverride? s.freqLabelOverride : freqLabel(s.freqIndex); }
+/** How many "tần suất" a sample actually represents — not "1 dòng = 1 tần suất":
+ *  "Đầu vào" / "Nghi ngờ / thử lại" đếm là 0 (không phải một tần suất định kỳ), một nhãn gộp
+ *  như "Tần suất 2, Tần suất 3" đếm là 2, còn lại (kể cả mẫu tạo tay không có nhãn) đếm là 1. */
+function sampleFreqCount(s){
+  const label = (s.freqLabelOverride||'').trim();
+  if(!label) return 1;
+  if(label==='Đầu vào' || label==='Nghi ngờ / thử lại') return 0;
+  const matches = label.match(/Tần suất \d+/g);
+  return matches? matches.length : 1;
+}
+function sumFreqCount(samples){ return samples.reduce((a,s)=>a+sampleFreqCount(s), 0); }
 /** Parses labels like "TS1", "TS2, TS3", "TS5,TS6", "ĐV", "NN" from a project's own "Tần suất"
  *  column into a spelled-out label such as "Tần suất 2, Tần suất 3". Unrecognized text is kept as-is. */
 function parseTanSuatLabel(raw){
@@ -244,7 +255,7 @@ function aggregateForGroup(materialId, supplier){
   const lots = DB.lots.filter(l=>l.materialId===materialId && normSupplierKey(l.supplier)===key);
   const totalQty = lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
   const allSamples = samplesForGroup(materialId, supplier);
-  const taken = allSamples.filter(s=>s.status!=='chua_lay').length;
+  const taken = sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
   const requiredTotal = (mat && mat.freqQty>0) ? Math.max(1, Math.ceil(totalQty/mat.freqQty)) : null;
   const remaining = requiredTotal===null ? null : Math.max(0, requiredTotal-taken);
   return { mat, supplier, totalQty, requiredTotal, taken, remaining, lotsCount: lots.length };
@@ -343,7 +354,7 @@ function aggregateForMaterialOnly(materialId){
   const lots = DB.lots.filter(l=>l.materialId===materialId);
   const totalQty = lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
   const allSamples = DB.samples.filter(s=>s.materialId===materialId);
-  const taken = allSamples.filter(s=>s.status!=='chua_lay').length;
+  const taken = sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
   const requiredTotal = (mat && mat.freqQty>0) ? Math.max(1, Math.ceil(totalQty/mat.freqQty)) : null;
   const remaining = requiredTotal===null ? null : Math.max(0, requiredTotal-taken);
   return { mat, totalQty, requiredTotal, taken, remaining };
@@ -352,10 +363,10 @@ function aggregateForMaterialOnly(materialId){
 /* ---------- DASHBOARD ---------- */
 function renderDashboard(main){
   const all = DB.samples;
-  const total = all.length;
-  const pending = all.filter(s=>s.status==='chua_lay').length;
-  const taken = all.filter(s=>{const st=sampleStatus(s); return st.key==='taken';}).length;
-  const hasKQTN = all.filter(s=>{const st=sampleStatus(s); return st.key==='pass';}).length;
+  const pending = sumFreqCount(all.filter(s=>s.status==='chua_lay'));
+  const taken = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='taken';}));
+  const hasKQTN = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='pass';}));
+  const total = pending + taken + hasKQTN;
 
   const f = state.filters;
   let rows = all.map(s=>{
@@ -421,9 +432,10 @@ function renderDashboard(main){
     ${groups.length===0? `<div class="card"><div class="empty">Chưa có dữ liệu phù hợp. Vào mục "Khối lượng nhập hàng" để tạo đợt nhập hàng.</div></div>` :
       groups.map(g=>{
         const items = g.items.slice().sort((a,b)=> (a.s.supplier||'').localeCompare(b.s.supplier||'') || a.s.freqIndex-b.s.freqIndex);
+        const totalFreq = sumFreqCount(items.map(r=>r.s));
         return `
         <div class="card">
-          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${items.length} tần suất</span></div>
+          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${totalFreq} tần suất</span></div>
           <table>
             <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
             <tbody>
@@ -543,7 +555,15 @@ function renderLots(main){
   main.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Khối lượng nhập hàng về</h1>
-      <p class="page-desc">Mỗi đợt ứng với một lần nhập vật liệu về công trường. Số tần suất lấy mẫu được tự động tính theo định mức của vật liệu và khối lượng nhập về.</p>
+      <p class="page-desc">Mỗi đợt ứng với một lần nhập vật liệu về công trường — dùng để theo dõi khối lượng, không tự tạo tần suất.</p>
+    </div>
+    <div class="card" id="xlsx-status-card-lots" style="display:flex;align-items:center;gap:10px;"></div>
+    <div class="card">
+      <div class="card-title">Nhập khối lượng từ Excel <span class="muted" style="font-weight:400;">Chỉ thêm đợt mới — không sửa/đè dữ liệu đã có</span></div>
+      <p class="muted">Cột cần có: Vật liệu, Nhà cung cấp, Khối lượng, Ngày nhập, Vị trí/phân khu (tuỳ chọn) — giống hệt các trường trong form "+ Thêm đợt nhập hàng" bên dưới.</p>
+      <input type="file" id="lots-excel-file" accept=".xlsx,.xls,.xlsm">
+      <div class="form-actions"><button class="btn" id="btn-lots-preview">Xem trước</button></div>
+      <div id="lots-preview-area"></div>
     </div>
     ${aggs.length>0? `
     <div class="card">
@@ -595,6 +615,121 @@ function renderLots(main){
       showToast('Đã xoá đợt nhập hàng.');
     }
   }));
+
+  /* --- Nhập khối lượng từ Excel --- */
+  const xlsxStatusCardLots = main.querySelector('#xlsx-status-card-lots');
+  function renderXlsxStatusLots(){
+    if(xlsxStatus==='loading'){
+      xlsxStatusCardLots.innerHTML = `<span class="spinner" style="width:16px;height:16px;border-width:2px;margin:0;border-radius:50%;border:2px solid #E1DDC9;border-top-color:var(--navy-2);animation:spin .7s linear infinite;"></span><span class="muted">Đang tải thư viện đọc Excel...</span>`;
+    } else if(xlsxStatus==='ready'){
+      xlsxStatusCardLots.innerHTML = `<span style="color:var(--green);font-weight:600;">✓ Sẵn sàng đọc Excel</span>`;
+    } else {
+      xlsxStatusCardLots.innerHTML = `<span style="color:var(--red);font-weight:600;">✕ Không tải được thư viện Excel — kiểm tra kết nối mạng.</span> <button class="btn secondary small" id="xlsx-retry-lots" style="margin-left:8px;">Thử lại</button>`;
+      main.querySelector('#xlsx-retry-lots')?.addEventListener('click', ()=>{ setXlsxStatus('loading'); loadXlsxLib(); });
+    }
+  }
+  renderXlsxStatusLots();
+  onXlsxStatusChange(renderXlsxStatusLots);
+  function requireXlsxReadyLots(){
+    if(xlsxStatus==='ready') return true;
+    showToast(xlsxStatus==='loading'? 'Thư viện đang tải, đợi vài giây rồi thử lại.' : 'Chưa tải được thư viện, bấm Thử lại ở trên.');
+    return false;
+  }
+
+  const lotsFileInput = main.querySelector('#lots-excel-file');
+  const lotsPreviewBtn = main.querySelector('#btn-lots-preview');
+  const lotsPreviewArea = main.querySelector('#lots-preview-area');
+  let currentLotItems = null;
+
+  lotsPreviewBtn.addEventListener('click', async ()=>{
+    if(!requireXlsxReadyLots()) return;
+    const file = lotsFileInput.files[0];
+    if(!file){ showToast('Vui lòng chọn một file Excel trước.'); return; }
+    lotsPreviewBtn.disabled = true; lotsPreviewBtn.textContent = 'Đang đọc...';
+    try{
+      const result = await parseExcelForLotsPreview(file);
+      lotsPreviewBtn.disabled = false; lotsPreviewBtn.textContent = 'Xem trước';
+      if(!result.ok){ lotsPreviewArea.innerHTML = `<div class="muted" style="color:var(--red);margin-top:10px;">${esc(result.message)}</div>`; return; }
+      currentLotItems = result.items;
+      renderLotsPreview(result);
+    }catch(e){
+      console.error(e);
+      lotsPreviewBtn.disabled = false; lotsPreviewBtn.textContent = 'Xem trước';
+      showToast('Không đọc được file này — kiểm tra lại đây có đúng là file Excel hợp lệ không.');
+    }
+  });
+
+  function renderLotsPreview(result){
+    const newItems = currentLotItems.filter(it=>it.status==='new');
+    const dupItems = currentLotItems.filter(it=>it.status==='duplicate');
+    lotsPreviewArea.innerHTML = `
+      <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px;">
+        <div class="muted" style="margin-bottom:8px;">Sheet "${esc(result.sheetName)}", dòng tiêu đề số ${result.headerRowNum}</div>
+        <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+          <div class="stat green"><div class="stat-num">${newItems.length}</div><div class="stat-label">Đợt mới — sẽ thêm</div></div>
+          <div class="stat" style="border-color:var(--line)"><div class="stat-num" style="color:var(--slate)">${dupItems.length}</div><div class="stat-label">Đã có sẵn — tự bỏ qua</div></div>
+          <div class="stat amber"><div class="stat-num">${result.willCreateMaterials.length}</div><div class="stat-label">Vật liệu mới sẽ tạo</div></div>
+        </div>
+        ${newItems.length===0? `<div class="empty">Không có đợt mới nào để thêm.</div>` : `
+        <div class="row-flex" style="margin-bottom:10px;">
+          <button class="btn secondary small" id="lots-sel-all">Chọn tất cả</button>
+          <button class="btn secondary small" id="lots-sel-none">Bỏ chọn tất cả</button>
+        </div>
+        <table>
+          <thead><tr><th></th><th>Vật liệu</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Vị trí</th><th>Ngày nhập</th></tr></thead>
+          <tbody>
+            ${newItems.map(it=>`
+              <tr>
+                <td><input type="checkbox" class="chk lots-item-chk" data-i="${currentLotItems.indexOf(it)}" ${it.selected?'checked':''}></td>
+                <td>${esc(it.vatLieuName)}</td>
+                <td>${esc(it.nhaCungCap)}</td>
+                <td class="mono">${fmtQty(it.quantity)}</td>
+                <td>${esc(it.viTri)||'—'}</td>
+                <td>${esc(it.ngayNhap)||'—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+        <div class="form-actions"><button class="btn" id="btn-lots-confirm">Xác nhận thêm dữ liệu đã chọn</button></div>
+        `}
+        ${dupItems.length>0? `
+        <details style="margin-top:14px;">
+          <summary class="muted" style="cursor:pointer;">Xem ${dupItems.length} đợt đã bỏ qua vì đã có sẵn</summary>
+          <table style="margin-top:8px;">
+            <thead><tr><th>Vật liệu</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Ngày nhập</th></tr></thead>
+            <tbody>${dupItems.map(it=>`<tr><td>${esc(it.vatLieuName)}</td><td>${esc(it.nhaCungCap)}</td><td class="mono">${fmtQty(it.quantity)}</td><td>${esc(it.ngayNhap)||'—'}</td></tr>`).join('')}</tbody>
+          </table>
+        </details>` : ''}
+      </div>
+      <div id="lots-commit-report"></div>
+    `;
+    lotsPreviewArea.querySelector('#lots-sel-all')?.addEventListener('click', ()=>{
+      lotsPreviewArea.querySelectorAll('.lots-item-chk').forEach(c=>{ c.checked=true; currentLotItems[+c.dataset.i].selected=true; });
+    });
+    lotsPreviewArea.querySelector('#lots-sel-none')?.addEventListener('click', ()=>{
+      lotsPreviewArea.querySelectorAll('.lots-item-chk').forEach(c=>{ c.checked=false; currentLotItems[+c.dataset.i].selected=false; });
+    });
+    lotsPreviewArea.querySelectorAll('.lots-item-chk').forEach(c=>{
+      c.addEventListener('change', ()=>{ currentLotItems[+c.dataset.i].selected = c.checked; });
+    });
+    lotsPreviewArea.querySelector('#btn-lots-confirm')?.addEventListener('click', ()=>{
+      const selectedCount = currentLotItems.filter(it=>it.selected && it.status==='new').length;
+      if(selectedCount===0){ showToast('Chưa chọn dòng nào để thêm.'); return; }
+      if(!confirm(`Thêm ${selectedCount} đợt nhập hàng mới vào app? Dữ liệu đã có sẵn sẽ không bị thay đổi.`)) return;
+      const report = commitLotsPreview(currentLotItems);
+      lotsPreviewArea.querySelector('#lots-commit-report').innerHTML = `
+        <div class="card" style="background:#FBFAF5;">
+          <div class="card-title">Đã cập nhật</div>
+          <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.9;">
+            <li>Vật liệu mới tạo: <b>${report.materialsAdded}</b></li>
+            <li>Đợt nhập hàng mới đã thêm: <b>${report.lotsAdded}</b></li>
+          </ul>
+        </div>`;
+      persist();
+      showToast('Đã thêm khối lượng vào app.');
+      lotsFileInput.value = '';
+      currentLotItems = null;
+    });
+  }
 }
 function openLotModal(id){
   const l = id? lotById(id) : {id:uid('lot'), materialId:DB.materials[0]?.id||'', name:'', supplier:'', location:'', quantity:'', freqCount:1, startDate:''};
@@ -876,8 +1011,11 @@ const EXCEL_HEADER_MAP = {
   soBBNT:['sobbnt','bbnt','mamau','ntvl'], ngayLayMau:['ngaylaymau'],
   soKQTN:['sokqtn'], phongThiNghiem:['phongthinghiem','donvithinghiem'],
   ngayCoKQTN:['ngaycokqtn','ngaycoketqua','ngaynt'], nguoiLayMau:['nguoilaymau'],
-  sttCol:['stt'], khoiLuongMau:['kllaymau'], tanSuatCol:['tansuat']
+  sttCol:['stt'], khoiLuongMau:['kllaymau'], tanSuatCol:['tansuat'],
+  khoiLuongCol:['khoiluong','khoiluongnhap'], ngayNhapCol:['ngaynhap','ngaynhaphang']
 };
+const SAMPLE_IMPORT_FIELDS = ['vatLieuCol','nhaCungCap','soBBNT','ngayLayMau','soKQTN','phongThiNghiem','viTri','ngayCoKQTN'];
+const LOT_IMPORT_FIELDS = ['vatLieuCol','nhaCungCap','khoiLuongCol','ngayNhapCol','viTri'];
 function normKey(h){ return stripDiacritics(String(h||'')).toLowerCase().replace(/[^a-z0-9]/g,''); }
 function stripDiacritics(str){ return str.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D'); }
 function mapExcelHeaders(headers){
@@ -890,9 +1028,10 @@ function mapExcelHeaders(headers){
   });
   return out;
 }
-/** Scans the first ~15 rows of a sheet for the row that best matches our known headers —
- *  real project exports don't always put headers on row 1. */
-function findBestHeaderRow(grid){
+/** Scans the first ~15 rows of a sheet for the row that best matches a given set of expected
+ *  fields — real project exports don't always put headers on row 1. */
+function findBestHeaderRow(grid, fields){
+  fields = fields || SAMPLE_IMPORT_FIELDS;
   let best = {rowIdx:-1, idx:null, score:-1};
   const maxScan = Math.min(grid.length, 15);
   for(let r=0;r<maxScan;r++){
@@ -900,7 +1039,7 @@ function findBestHeaderRow(grid){
     if(!headers || headers.every(h=>!h)) continue;
     const idx = mapExcelHeaders(headers);
     let score = 0;
-    ['vatLieuCol','nhaCungCap','soBBNT','ngayLayMau','soKQTN','phongThiNghiem','viTri','ngayCoKQTN'].forEach(f=>{ if(idx[f]!==-1) score++; });
+    fields.forEach(f=>{ if(idx[f]!==-1) score++; });
     if(score>best.score){ best = {rowIdx:r, idx, score}; }
   }
   return best;
@@ -951,7 +1090,7 @@ async function parseExcelForPreview(file){
   wb.SheetNames.forEach(name=>{
     const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
     if(grid.length<2) return;
-    const found = findBestHeaderRow(grid);
+    const found = findBestHeaderRow(grid, SAMPLE_IMPORT_FIELDS);
     if(found.score > overallBest.score){ overallBest = found; bestSheetName = name; bestGrid = grid; }
   });
   if(!bestSheetName || overallBest.score<3){
@@ -996,6 +1135,68 @@ async function parseExcelForPreview(file){
     });
   });
   return { ok:true, sheetName:bestSheetName, headerRowNum:overallBest.rowIdx+1, items, willCreateMaterials:[...willCreateMaterials] };
+}
+
+/** Reads a file for the "Khối lượng nhập hàng" (đợt nhập hàng) columns: Vật liệu, Nhà cung cấp,
+ *  Khối lượng, Vị trí/phân khu, Ngày nhập. Same safe rule as the tần suất importer: only ever
+ *  ADDS new đợt nhập hàng — an exact match on vật liệu+nhà cung cấp+ngày nhập+khối lượng is
+ *  treated as already-existing and skipped, never overwritten. */
+async function parseExcelForLotsPreview(file){
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array', cellDates:true});
+  let overallBest = {score:-1};
+  let bestSheetName = null, bestGrid = null;
+  wb.SheetNames.forEach(name=>{
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
+    if(grid.length<2) return;
+    const found = findBestHeaderRow(grid, LOT_IMPORT_FIELDS);
+    if(found.score > overallBest.score){ overallBest = found; bestSheetName = name; bestGrid = grid; }
+  });
+  if(!bestSheetName || overallBest.score<3){
+    return { ok:false, message:'Không tìm thấy sheet nào có cấu trúc cột phù hợp (cần ít nhất cột Vật liệu, Nhà cung cấp, Khối lượng, Ngày nhập).' };
+  }
+  const idx = overallBest.idx;
+  const rows = bestGrid.slice(overallBest.rowIdx+1);
+  const willCreateMaterials = new Set();
+  const seenInFile = new Set();
+  const items = [];
+  rows.forEach(r=>{
+    const sttVal = idx.sttCol!==-1? r[idx.sttCol] : null;
+    if(idx.sttCol!==-1 && (sttVal===null||sttVal===undefined||sttVal==='')) return;
+    const vatLieuName = extractMaterialName(idx.vatLieuCol!==-1? r[idx.vatLieuCol] : '');
+    const nhaCungCap = idx.nhaCungCap!==-1? cleanExcelCode(r[idx.nhaCungCap]) : '';
+    const quantity = idx.khoiLuongCol!==-1? (parseFloat(r[idx.khoiLuongCol])||0) : 0;
+    if(!vatLieuName || !nhaCungCap || quantity<=0 || /^\d+(\.\d+)?$/.test(vatLieuName) || vatLieuName.includes('#REF') || nhaCungCap.includes('#REF')) return;
+
+    const viTri = idx.viTri!==-1? cleanExcelCode(r[idx.viTri]) : '';
+    const ngayNhap = idx.ngayNhapCol!==-1? excelToISODate(r[idx.ngayNhapCol]) : '';
+    const mat = findOrCreateMaterialByName(vatLieuName, willCreateMaterials);
+
+    const dupKey = mat.id+'|'+normSupplierKey(nhaCungCap)+'|'+ngayNhap+'|'+quantity;
+    let status = 'new', reason = '';
+    const existsInApp = DB.lots.some(l=>l.materialId===mat.id && normSupplierKey(l.supplier)===normSupplierKey(nhaCungCap) && l.startDate===ngayNhap && Number(l.quantity)===quantity);
+    if(existsInApp){ status='duplicate'; reason='Đã có đúng đợt nhập hàng này (cùng vật liệu, NCC, ngày, khối lượng) trong app'; }
+    else if(seenInFile.has(dupKey)){ status='duplicate'; reason='Trùng lặp trong chính file này'; }
+    else seenInFile.add(dupKey);
+
+    items.push({ status, reason, vatLieuName, nhaCungCap, quantity, viTri, ngayNhap, materialId: mat.id, selected: status==='new' });
+  });
+  return { ok:true, sheetName:bestSheetName, headerRowNum:overallBest.rowIdx+1, items, willCreateMaterials:[...willCreateMaterials] };
+}
+function commitLotsPreview(items){
+  const report = { materialsAdded:0, lotsAdded:0 };
+  items.filter(it=>it.selected && it.status==='new').forEach(it=>{
+    const matBefore = DB.materials.length;
+    const mat = findOrCreateMaterialByName(it.vatLieuName);
+    if(!DB.materials.find(m=>m.id===mat.id)){ DB.materials.push(mat); }
+    if(DB.materials.length>matBefore) report.materialsAdded++;
+    DB.lots.push({
+      id:uid('lot'), materialId:mat.id, name:`${mat.name} — ${it.ngayNhap||'chưa có ngày'}`,
+      supplier:it.nhaCungCap, location:it.viTri, quantity:it.quantity, startDate:it.ngayNhap
+    });
+    report.lotsAdded++;
+  });
+  return report;
 }
 
 function commitExcelPreview(items){
@@ -1197,10 +1398,11 @@ function renderResults(main){
     ${takenSamples.length===0? `<div class="card"><div class="empty">Chưa có mẫu nào được lấy. Vào mục "Thông tin lấy mẫu vật liệu" trước.</div></div>` :
       groups.map(g=>{
         const items = g.items.slice().sort((a,b)=> (a.supplier||'').localeCompare(b.supplier||'') || a.freqIndex-b.freqIndex);
-        const hasKQTN = items.filter(s=>sampleStatus(s).key==='pass').length;
+        const hasKQTN = sumFreqCount(items.filter(s=>sampleStatus(s).key==='pass'));
+        const totalFreq = sumFreqCount(items);
         return `
         <div class="card">
-          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${items.length} tần suất · ${hasKQTN} đã có KQTN</span></div>
+          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${totalFreq} tần suất · ${hasKQTN} đã có KQTN</span></div>
           <table>
             <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái KQTN</th></tr></thead>
             <tbody>

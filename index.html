@@ -76,6 +76,14 @@
   .filter-bar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
   .filter-bar select,.filter-bar input{width:auto;min-width:150px;}
   .lot-header{display:flex;justify-content:space-between;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:8px;}
+  .lot-group{border:1px solid var(--line);border-radius:var(--radius);margin-bottom:10px;overflow:hidden;background:#FCFBF7;}
+  .lot-group summary{list-style:none;cursor:pointer;padding:13px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-weight:700;font-size:13.5px;user-select:none;}
+  .lot-group summary::-webkit-details-marker{display:none;}
+  .lot-group summary::before{content:'▸';display:inline-block;margin-right:8px;color:var(--ink-soft);transition:transform .15s ease;}
+  .lot-group[open] summary::before{transform:rotate(90deg);}
+  .lot-group summary .lot-group-sub{font-weight:400;color:var(--ink-soft);font-size:11.5px;}
+  .lot-group-body{padding:4px 16px 10px 16px;background:var(--card);border-top:1px solid var(--line);}
+  .lot-group-body .lot-header:last-child{border-bottom:none;}
   .lot-name{font-weight:700;font-size:14px;}
   .lot-meta{font-size:11.5px;color:var(--ink-soft);margin-top:3px;}
   .slot-list{margin-top:8px;}
@@ -585,21 +593,42 @@ function renderLots(main){
     </div>` : ''}
     <div class="card">
       <div class="card-title">Danh sách các đợt nhập hàng <button class="btn small" id="lot-add">+ Thêm đợt nhập hàng</button></div>
-      ${DB.lots.length===0? `<div class="empty">Chưa có đợt nhập hàng nào. ${DB.materials.length===0?'Hãy thêm vật liệu trước.':''}</div>` : DB.lots.map(l=>{
-        const mat = materialById(l.materialId);
-        return `
-        <div class="lot-header">
-          <div>
-            <div class="lot-name">${mat?esc(mat.name):'—'} — ${esc(l.startDate)||'chưa có ngày nhập'}</div>
-            <div class="lot-meta">Khối lượng: ${l.quantity? fmtQty(l.quantity) : 0} ${mat?esc(mat.unit):''} · Nhà cung cấp: ${esc(l.supplier)||'—'} · Phân khu: ${esc(l.location)||'—'} · Ngày nhập: ${esc(l.startDate)||'—'}</div>
-            <div class="lot-meta">Tần suất lấy mẫu được tính chung cho cả nhóm "${mat?esc(mat.name):''} — ${esc(l.supplier)||'chưa rõ NCC'}" — xem tiến độ ở bảng tổng hợp phía trên hoặc tab "Thông tin lấy mẫu vật liệu".</div>
-          </div>
-          <div class="row-flex">
-            <button class="btn secondary small" data-editlot="${l.id}">Sửa</button>
-            <button class="btn danger small" data-dellot="${l.id}">Xoá</button>
-          </div>
-        </div>`;
-      }).join('')}
+      ${DB.lots.length===0? `<div class="empty">Chưa có đợt nhập hàng nào. ${DB.materials.length===0?'Hãy thêm vật liệu trước.':''}</div>` : (()=>{
+        const byMat = {};
+        DB.lots.forEach(l=>{
+          const key = l.materialId || '_khac';
+          if(!byMat[key]) byMat[key] = [];
+          byMat[key].push(l);
+        });
+        const matGroups = Object.keys(byMat)
+          .map(key=>({ mat: materialById(key), lots: byMat[key] }))
+          .filter(g=>g.mat)
+          .sort((a,b)=>a.mat.name.localeCompare(b.mat.name));
+        return matGroups.map(g=>{
+          const totalQty = g.lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
+          return `
+          <details class="lot-group">
+            <summary class="lot-group-summary">
+              <span class="lot-group-name">${esc(g.mat.name)}</span>
+              <span class="muted">${g.lots.length} đợt · tổng ${fmtQty(totalQty)} ${esc(g.mat.unit)}</span>
+            </summary>
+            <div class="lot-group-body">
+              ${g.lots.map(l=>`
+                <div class="lot-header">
+                  <div>
+                    <div class="lot-name">${esc(g.mat.name)} — ${esc(l.startDate)||'chưa có ngày nhập'}</div>
+                    <div class="lot-meta">Khối lượng: ${l.quantity? fmtQty(l.quantity) : 0} ${esc(g.mat.unit)} · Nhà cung cấp: ${esc(l.supplier)||'—'} · Phân khu: ${esc(l.location)||'—'} · Ngày nhập: ${esc(l.startDate)||'—'}</div>
+                    <div class="lot-meta">Tần suất lấy mẫu được tính chung cho cả nhóm "${esc(g.mat.name)} — ${esc(l.supplier)||'chưa rõ NCC'}" — xem tiến độ ở bảng tổng hợp phía trên hoặc tab "Thông tin lấy mẫu vật liệu".</div>
+                  </div>
+                  <div class="row-flex">
+                    <button class="btn secondary small" data-editlot="${l.id}">Sửa</button>
+                    <button class="btn danger small" data-dellot="${l.id}">Xoá</button>
+                  </div>
+                </div>`).join('')}
+            </div>
+          </details>`;
+        }).join('');
+      })()}
     </div>
   `;
   main.querySelector('#lot-add').addEventListener('click', ()=>{

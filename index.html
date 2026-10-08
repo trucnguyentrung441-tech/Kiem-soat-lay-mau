@@ -128,7 +128,6 @@ const TABS = [
   {id:'materials', label:'Danh mục vật liệu', icon:'▣'},
   {id:'lots', label:'Khối lượng nhập hàng', icon:'▦'},
   {id:'sampling', label:'Thông tin lấy mẫu vật liệu', icon:'●'},
-  {id:'results', label:'Danh mục theo dõi lấy mẫu vật liệu', icon:'✓'},
   {id:'excel', label:'Nhập từ Excel', icon:'⇅'},
 ];
 
@@ -345,7 +344,6 @@ function renderMain(){
   else if(state.tab==='materials') renderMaterials(main);
   else if(state.tab==='lots') renderLots(main);
   else if(state.tab==='sampling') renderSampling(main);
-  else if(state.tab==='results') renderResults(main);
   else if(state.tab==='excel') renderExcel(main);
 }
 
@@ -370,11 +368,11 @@ function aggregateForMaterialOnly(materialId){
 
 /* ---------- DASHBOARD ---------- */
 function renderDashboard(main){
-  const all = DB.samples;
+  const all = DB.samples.filter(s=>s.materialId && materialById(s.materialId)); // bỏ mẫu mồ côi để số liệu khớp với danh sách
   const pending = sumFreqCount(all.filter(s=>s.status==='chua_lay'));
   const taken = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='taken';}));
-  const hasKQTN = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='pass';}));
-  const total = pending + taken + hasKQTN;
+  const hasKQTNStat = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='pass';}));
+  const total = pending + taken + hasKQTNStat;
 
   const f = state.filters;
   let rows = all.map(s=>{
@@ -393,7 +391,7 @@ function renderDashboard(main){
     groupMap[key].items.push(r);
   });
   const groups = Object.values(groupMap).sort((a,b)=> (a.mat?a.mat.name:'').localeCompare(b.mat?b.mat.name:''));
-  const matAggs = materialsInUseForDashboard().map(m=>aggregateForMaterialOnly(m.id));
+  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier)).filter(a=>a.mat);
 
   main.innerHTML = `
     <div class="page-header">
@@ -404,26 +402,32 @@ function renderDashboard(main){
       <div class="stat navy"><div class="stat-num">${total}</div><div class="stat-label">Tổng số tần suất</div></div>
       <div class="stat amber"><div class="stat-num">${pending}</div><div class="stat-label">Chưa lấy mẫu</div></div>
       <div class="stat" style="border-color:var(--line)"><div class="stat-num" style="color:var(--slate)">${taken}</div><div class="stat-label">Đã lấy mẫu — chưa KQTN</div></div>
-      <div class="stat green"><div class="stat-num">${hasKQTN}</div><div class="stat-label">Đã có KQTN</div></div>
+      <div class="stat green"><div class="stat-num">${hasKQTNStat}</div><div class="stat-label">Đã có KQTN</div></div>
     </div>
-    ${matAggs.length>0? `
+    ${aggs.length>0? `
     <div class="card">
-      <div class="card-title">Khối lượng &amp; tần suất theo vật liệu <span class="muted" style="font-weight:400;">Gộp mọi nhà cung cấp — riêng biệt với bảng chi tiết bên dưới</span></div>
-      <table>
-        <thead><tr><th>Vật liệu</th><th>Tổng khối lượng đã về</th><th>Đã lấy tần suất</th><th>Còn lại chưa lấy</th></tr></thead>
-        <tbody>
-          ${matAggs.map(a=>`
-            <tr>
-              <td>${esc(a.mat.name)}</td>
-              <td class="mono">${fmtQty(a.totalQty)} ${esc(a.mat.unit)}</td>
-              <td class="mono">${a.taken}</td>
-              <td>${a.remaining===null? `<span class="muted">Chưa có định mức</span>` : a.remaining>0? `<span class="badge pending">Còn ${a.remaining}</span>` : `<span class="badge pass">Đã đủ</span>`}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
+      <div class="card-title">Tiến độ lấy mẫu theo vật liệu &amp; nhà cung cấp</div>
+      ${aggs.map(a=>{
+        const pct = a.requiredTotal? Math.min(100, Math.round(a.taken/a.requiredTotal*100)) : (a.taken>0?100:0);
+        const isFull = a.requiredTotal!==null && a.remaining===0;
+        return `
+        <div class="progress-item">
+          <div class="progress-top">
+            <div>
+              <div class="progress-name">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— NCC: ${esc(a.supplier)||'Chưa rõ'}</span></div>
+              <div class="progress-sub">Tổng khối lượng đã về: ${fmtQty(a.totalQty)} ${esc(a.mat.unit)}${a.mat.freqQty>0? ` · Định mức ${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
+            </div>
+            <div class="progress-nums">
+              ${a.requiredTotal===null? 'Chưa tính được tần suất' : `Đã lấy ${a.taken}/${a.requiredTotal} tần suất`}
+              ${a.remaining>0? ` · <span style="color:var(--amber);font-weight:700;">còn ${a.remaining}</span>` : (a.requiredTotal!==null? ` · <span style="color:var(--green);font-weight:700;">đã đủ</span>` : '')}
+            </div>
+          </div>
+          <div class="progress-bar"><div class="progress-fill ${isFull?'':'warn'}" style="width:${pct}%;"></div></div>
+        </div>`;
+      }).join('')}
     </div>` : ''}
     <div class="card">
-      <div class="card-title">Bảng theo dõi chi tiết</div>
+      <div class="card-title">Bảng theo dõi chi tiết <span class="muted" style="font-weight:400;">Bấm vào tên vật liệu để xem chi tiết</span></div>
       <div class="filter-bar">
         <select id="f-material">
           <option value="">Tất cả vật liệu</option>
@@ -436,37 +440,43 @@ function renderDashboard(main){
           <option value="pass" ${f.status==='pass'?'selected':''}>Đã có KQTN</option>
         </select>
       </div>
+      ${groups.length===0? `<div class="empty">Chưa có dữ liệu phù hợp. Vào mục "Khối lượng nhập hàng" để tạo đợt nhập hàng.</div>` :
+        groups.map(g=>{
+          const items = g.items.slice().sort((a,b)=> (a.s.supplier||'').localeCompare(b.s.supplier||'') || a.s.freqIndex-b.s.freqIndex);
+          const totalFreq = sumFreqCount(items.map(r=>r.s));
+          const hasKQTN = sumFreqCount(items.filter(r=>r.st.key==='pass').map(r=>r.s));
+          return `
+          <details class="lot-group">
+            <summary>
+              <span>${esc(g.mat.name)}</span>
+              <span class="lot-group-sub">${totalFreq} tần suất · ${hasKQTN} đã có KQTN</span>
+            </summary>
+            <div class="lot-group-body">
+              <table>
+                <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
+                <tbody>
+                  ${items.map(r=>{
+                    const daNghiemThu = !!(r.s.sampleCode && r.s.sampleCode.trim()!=='');
+                    return `
+                    <tr>
+                      <td><span class="freq-chip">${sampleFreqLabel(r.s)}</span></td>
+                      <td>${esc(r.s.supplier)||'—'}</td>
+                      <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
+                      <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
+                      <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
+                      <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
+                      <td>${esc(r.s.dateTaken)||'—'}</td>
+                      <td>${esc(r.s.ngayKQTN)||'—'}</td>
+                      <td><span class="badge ${r.st.key==='pending'?'pending':r.st.key==='taken'?'taken':r.st.key}">${r.st.label}</span></td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </details>`;
+        }).join('')
+      }
     </div>
-    ${groups.length===0? `<div class="card"><div class="empty">Chưa có dữ liệu phù hợp. Vào mục "Khối lượng nhập hàng" để tạo đợt nhập hàng.</div></div>` :
-      groups.map(g=>{
-        const items = g.items.slice().sort((a,b)=> (a.s.supplier||'').localeCompare(b.s.supplier||'') || a.s.freqIndex-b.s.freqIndex);
-        const totalFreq = sumFreqCount(items.map(r=>r.s));
-        return `
-        <div class="card">
-          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${totalFreq} tần suất</span></div>
-          <table>
-            <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
-            <tbody>
-              ${items.map(r=>{
-                const daNghiemThu = !!(r.s.sampleCode && r.s.sampleCode.trim()!=='');
-                return `
-                <tr>
-                  <td><span class="freq-chip">${sampleFreqLabel(r.s)}</span></td>
-                  <td>${esc(r.s.supplier)||'—'}</td>
-                  <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
-                  <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
-                  <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
-                  <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
-                  <td>${esc(r.s.dateTaken)||'—'}</td>
-                  <td>${esc(r.s.ngayKQTN)||'—'}</td>
-                  <td><span class="badge ${r.st.key==='pending'?'pending':r.st.key==='taken'?'taken':r.st.key}">${r.st.label}</span></td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>`;
-      }).join('')
-    }
   `;
   main.querySelector('#f-material')?.addEventListener('change',e=>{state.filters.materialId=e.target.value; renderDashboard(main);});
   main.querySelector('#f-status')?.addEventListener('change',e=>{state.filters.status=e.target.value; renderDashboard(main);});
@@ -855,41 +865,63 @@ function renderSampling(main){
         </tbody>
       </table>
     </div>` : ''}
-    ${aggs.length===0? `<div class="card"><div class="empty">Chưa có đợt nhập hàng nào. Vào mục "Khối lượng nhập hàng" để tạo.</div></div>` :
-      aggs.map(a=>{
-        const samples = samplesForGroup(a.mat.id, a.supplier);
-        return `
-        <div class="card">
-          <div class="card-title">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</span></div>
-          ${samples.length===0? `<div class="empty">Chưa có tần suất nào.</div>` : `
-          <table>
-            <thead><tr><th>Tần suất</th><th>Số BBNT</th><th>Khối lượng</th><th>Vị trí</th><th>Người lấy mẫu</th><th>Ngày lấy mẫu</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày có KQTN</th><th>Trạng thái</th><th></th></tr></thead>
-            <tbody>
-            ${samples.map(s=>{
-              const st = sampleStatus(s);
-              return `
-              <tr>
-                <td><span class="freq-chip">${sampleFreqLabel(s)}</span></td>
-                <td class="mono">${esc(s.sampleCode)||'—'}</td>
-                <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
-                <td>${esc(s.location)||'—'}</td>
-                <td>${esc(s.personTaken)||'—'}</td>
-                <td>${esc(s.dateTaken)||'—'}</td>
-                <td class="mono">${esc(s.soKQTN)||'—'}</td>
-                <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
-                <td>${esc(s.ngayKQTN)||'—'}</td>
-                <td><span class="badge ${st.key==='pending'?'pending':st.key==='taken'?'taken':st.key}">${st.label}</span></td>
-                <td class="row-flex">
-                  <button class="btn secondary small" data-samp="${s.id}">${s.status==='chua_lay'?'Nhập':'Sửa'}</button>
-                  <button class="btn danger small" data-delsamp="${s.id}">Xoá</button>
-                </td>
-              </tr>`;
-            }).join('')}
-            </tbody>
-          </table>`}
-        </div>`;
-      }).join('')
-    }
+    ${aggs.length===0? `<div class="card"><div class="empty">Chưa có đợt nhập hàng nào. Vào mục "Khối lượng nhập hàng" để tạo.</div></div>` : `
+    <div class="card">
+      <div class="card-title">Danh sách tần suất theo vật liệu <span class="muted" style="font-weight:400;">Bấm vào tên vật liệu để xem chi tiết</span></div>
+      ${(()=>{
+        const matGroupMap = {};
+        aggs.forEach(a=>{
+          if(!matGroupMap[a.mat.id]) matGroupMap[a.mat.id] = { mat:a.mat, suppliers:[] };
+          matGroupMap[a.mat.id].suppliers.push(a);
+        });
+        const matGroups = Object.values(matGroupMap).sort((x,y)=>x.mat.name.localeCompare(y.mat.name));
+        return matGroups.map(g=>{
+          const allSamples = g.suppliers.flatMap(a=>samplesForGroup(a.mat.id, a.supplier));
+          const totalFreq = sumFreqCount(allSamples);
+          const takenFreq = sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
+          return `
+          <details class="lot-group">
+            <summary>
+              <span>${esc(g.mat.name)}</span>
+              <span class="lot-group-sub">${g.suppliers.length} nhà cung cấp · ${totalFreq} tần suất · ${takenFreq} đã lấy</span>
+            </summary>
+            <div class="lot-group-body">
+              ${g.suppliers.map(a=>{
+                const samples = samplesForGroup(a.mat.id, a.supplier);
+                return `
+                <div style="margin:12px 0 4px 0;font-weight:700;font-size:12.5px;color:var(--navy-2);">Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</div>
+                ${samples.length===0? `<div class="empty">Chưa có tần suất nào.</div>` : `
+                <table>
+                  <thead><tr><th>Tần suất</th><th>Số BBNT</th><th>Khối lượng</th><th>Vị trí</th><th>Người lấy mẫu</th><th>Ngày lấy mẫu</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày có KQTN</th><th>Trạng thái</th><th></th></tr></thead>
+                  <tbody>
+                  ${samples.map(s=>{
+                    const st = sampleStatus(s);
+                    return `
+                    <tr>
+                      <td><span class="freq-chip">${sampleFreqLabel(s)}</span></td>
+                      <td class="mono">${esc(s.sampleCode)||'—'}</td>
+                      <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
+                      <td>${esc(s.location)||'—'}</td>
+                      <td>${esc(s.personTaken)||'—'}</td>
+                      <td>${esc(s.dateTaken)||'—'}</td>
+                      <td class="mono">${esc(s.soKQTN)||'—'}</td>
+                      <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
+                      <td>${esc(s.ngayKQTN)||'—'}</td>
+                      <td><span class="badge ${st.key==='pending'?'pending':st.key==='taken'?'taken':st.key}">${st.label}</span></td>
+                      <td class="row-flex">
+                        <button class="btn secondary small" data-samp="${s.id}">${s.status==='chua_lay'?'Nhập':'Sửa'}</button>
+                        <button class="btn danger small" data-delsamp="${s.id}">Xoá</button>
+                      </td>
+                    </tr>`;
+                  }).join('')}
+                  </tbody>
+                </table>`}`;
+              }).join('')}
+            </div>
+          </details>`;
+        }).join('');
+      })()}
+    </div>`}
   `;
   main.querySelectorAll('[data-samp]').forEach(b=>b.addEventListener('click',()=>openSampleModal(b.dataset.samp)));
   main.querySelectorAll('[data-delsamp]').forEach(b=>b.addEventListener('click',()=>deleteSample(b.dataset.delsamp)));
@@ -1383,81 +1415,6 @@ function renderExcel(main){
   }
 }
 
-/* ---------- DANH MỤC THEO DÕI (chỉ đọc, lấy dữ liệu từ phần Lấy mẫu) ---------- */
-function renderResults(main){
-  const takenSamples = DB.samples.filter(s=>s.status!=='chua_lay');
-  const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier)).filter(a=>a.mat); // bỏ qua nhóm mồ côi (vật liệu đã bị xoá) để tránh sập trang
-  const groupMap = {};
-  takenSamples.forEach(s=>{
-    const mat = s.materialId? materialById(s.materialId) : null;
-    if(!mat) return; // dữ liệu mồ côi (vật liệu đã bị xoá) — ẩn hẳn, không hiện "Vật liệu khác"
-    const key = mat.id;
-    if(!groupMap[key]) groupMap[key] = { mat, items: [] };
-    groupMap[key].items.push(s);
-  });
-  const groups = Object.values(groupMap).sort((a,b)=> (a.mat?a.mat.name:'').localeCompare(b.mat?b.mat.name:''));
-
-  main.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Danh mục theo dõi lấy mẫu vật liệu</h1>
-      <p class="page-desc">Bảng này lấy dữ liệu trực tiếp từ tab "Thông tin lấy mẫu vật liệu" — không cần nhập lại. Để cập nhật Số BBNT, Số KQTN, Phòng thí nghiệm hay Ngày có KQTN, hãy sửa ở tab đó.</p>
-    </div>
-    ${aggs.length>0? `
-    <div class="card">
-      <div class="card-title">Tiến độ lấy mẫu theo vật liệu &amp; nhà cung cấp</div>
-      ${aggs.map(a=>{
-        const pct = a.requiredTotal? Math.min(100, Math.round(a.taken/a.requiredTotal*100)) : (a.taken>0?100:0);
-        const isFull = a.requiredTotal!==null && a.remaining===0;
-        return `
-        <div class="progress-item">
-          <div class="progress-top">
-            <div>
-              <div class="progress-name">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— NCC: ${esc(a.supplier)||'Chưa rõ'}</span></div>
-              <div class="progress-sub">Tổng khối lượng đã về: ${fmtQty(a.totalQty)} ${esc(a.mat.unit)}${a.mat.freqQty>0? ` · Định mức ${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
-            </div>
-            <div class="progress-nums">
-              ${a.requiredTotal===null? 'Chưa tính được tần suất' : `Đã lấy ${a.taken}/${a.requiredTotal} tần suất`}
-              ${a.remaining>0? ` · <span style="color:var(--amber);font-weight:700;">còn ${a.remaining}</span>` : (a.requiredTotal!==null? ` · <span style="color:var(--green);font-weight:700;">đã đủ</span>` : '')}
-            </div>
-          </div>
-          <div class="progress-bar"><div class="progress-fill ${isFull?'':'warn'}" style="width:${pct}%;"></div></div>
-        </div>`;
-      }).join('')}
-    </div>` : ''}
-    ${takenSamples.length===0? `<div class="card"><div class="empty">Chưa có mẫu nào được lấy. Vào mục "Thông tin lấy mẫu vật liệu" trước.</div></div>` :
-      groups.map(g=>{
-        const items = g.items.slice().sort((a,b)=> (a.supplier||'').localeCompare(b.supplier||'') || a.freqIndex-b.freqIndex);
-        const hasKQTN = sumFreqCount(items.filter(s=>sampleStatus(s).key==='pass'));
-        const totalFreq = sumFreqCount(items);
-        return `
-        <div class="card">
-          <div class="card-title">${esc(g.mat.name)} <span class="muted" style="font-weight:400;">${totalFreq} tần suất · ${hasKQTN} đã có KQTN</span></div>
-          <table>
-            <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái KQTN</th></tr></thead>
-            <tbody>
-            ${items.map(s=>{
-              const st = sampleStatus(s);
-              const daNghiemThu = !!(s.sampleCode && s.sampleCode.trim()!=='');
-              return `
-              <tr>
-                <td><span class="freq-chip">${sampleFreqLabel(s)}</span></td>
-                <td>${esc(s.supplier)||'—'}</td>
-                <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
-                <td>${daNghiemThu? `<span class="mono">${esc(s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
-                <td class="mono">${esc(s.soKQTN)||'—'}</td>
-                <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
-                <td>${esc(s.dateTaken)||'—'}</td>
-                <td>${esc(s.ngayKQTN)||'—'}</td>
-                <td><span class="badge ${st.key==='taken'?'taken':st.key}">${st.label}</span></td>
-              </tr>`;
-            }).join('')}
-            </tbody>
-          </table>
-        </div>`;
-      }).join('')
-    }
-  `;
-}
 
 /* ==========================================================
    MODAL — lives entirely outside the tab render cycle so

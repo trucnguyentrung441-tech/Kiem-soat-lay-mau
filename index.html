@@ -59,7 +59,7 @@
   .btn.small{padding:5px 10px;font-size:11.5px;}
   .btn:disabled{opacity:.45;cursor:not-allowed;}
   label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin:10px 0 5px 0;}
-  input[type=text],input[type=date],input[type=number],select,textarea{
+  input[type=text],input[type=email],input[type=password],input[type=date],input[type=number],select,textarea{
     width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:5px;font-size:13px;font-family:inherit;background:#fff;color:var(--ink);
   }
   input:focus,select:focus,textarea:focus{outline:2px solid var(--slate);outline-offset:0;border-color:var(--slate);}
@@ -114,7 +114,23 @@
     .stat-grid{grid-template-columns:repeat(2,1fr);}
     .grid2,.grid3{grid-template-columns:1fr;}
   }
+
+  /* --- chế độ đám mây: chỉ xem / đăng nhập --- */
+  body.readonly #mat-add, body.readonly [data-edit], body.readonly [data-del],
+  body.readonly #lot-add, body.readonly [data-editlot], body.readonly [data-dellot],
+  body.readonly [data-samp], body.readonly [data-delsamp], body.readonly #btn-new-freq,
+  body.readonly #lots-excel-card, body.readonly #xlsx-status-card-lots{display:none !important;}
+  .side-footer{margin-top:auto;padding:14px 20px 4px 20px;border-top:1px solid rgba(255,255,255,.12);font-size:11.5px;color:#9FB4C9;word-break:break-all;}
+  .side-footer .btn{padding:4px 9px;font-size:11px;}
+  .auth-wrap{display:flex;justify-content:center;padding:50px 16px;}
+  .auth-card{width:100%;max-width:380px;}
+  .auth-msg{background:var(--amber-bg);color:#7A560A;border-radius:5px;padding:8px 10px;font-size:12.5px;margin-bottom:8px;}
+  @media (max-width: 760px){
+    .side-footer{margin-top:0;border-top:none;padding:0 10px;display:flex;align-items:center;gap:8px;white-space:nowrap;}
+    .side-footer .hide-mobile{display:none;}
+  }
 </style>
+<script src="config.js"></script>
 </head>
 <body>
 <div id="app">
@@ -129,6 +145,7 @@ const TABS = [
   {id:'lots', label:'Khối lượng nhập hàng', icon:'▦'},
   {id:'sampling', label:'Thông tin lấy mẫu vật liệu', icon:'●'},
   {id:'excel', label:'Nhập từ Excel', icon:'⇅'},
+  {id:'users', label:'Quản lý người dùng', icon:'☰'},
 ];
 
 let DB = null;
@@ -211,6 +228,7 @@ async function loadData(){
   }
 }
 function saveData(){
+  if(CLOUD){ if(canEdit()) scheduleCloudPush(); return; }
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }
   catch(e){ console.error(e); showToast('Không lưu được dữ liệu (bộ nhớ trình duyệt có thể đã đầy).'); }
 }
@@ -317,26 +335,334 @@ function migrateSamplesIfNeeded(){
 }
 
 /* ==========================================================
+   CHẾ ĐỘ ĐÁM MÂY (Supabase) — chỉ bật khi config.js có đủ
+   SUPABASE_URL và SUPABASE_ANON_KEY. Nếu để trống, app chạy như cũ
+   (lưu trong trình duyệt của từng máy).
+   Vai trò: pending (chờ duyệt) / viewer (chỉ xem) / editor (nhập, sửa) / admin (quản trị).
+   Quyền thật sự được chặn ở phía máy chủ bằng RLS (xem supabase_setup.sql);
+   việc ẩn nút trên giao diện chỉ để tiện dùng.
+   ========================================================== */
+const APP_CFG = window.APP_CONFIG || {};
+const CLOUD = !!(APP_CFG.SUPABASE_URL && APP_CFG.SUPABASE_ANON_KEY);
+let sb = null, session = null, profile = null;
+let cloudVersion = 0, cloudSaveTimer = null, cloudPushing = false, cloudPushQueued = false;
+let realtimeStarted = false, sidebarBound = false;
+const ROLE_LABELS = {pending:'Chờ duyệt', viewer:'Chỉ xem', editor:'Được nhập/sửa', admin:'Quản trị'};
+function canEdit(){ return !CLOUD || !!(profile && (profile.role==='editor' || profile.role==='admin')); }
+function isAdmin(){ return CLOUD && !!(profile && profile.role==='admin'); }
+function visibleTabs(){ return TABS.filter(t=> (t.id!=='excel' || canEdit()) && (t.id!=='users' || isAdmin())); }
+
+function loadScriptOnce(src){
+  return new Promise((resolve,reject)=>{
+    const sc = document.createElement('script');
+    sc.src = src; sc.onload = resolve; sc.onerror = ()=>reject(new Error('Không tải được '+src));
+    document.head.appendChild(sc);
+  });
+}
+async function loadSupabaseLib(){
+  if(window.supabase && window.supabase.createClient) return;
+  const sources = ['https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2','https://unpkg.com/@supabase/supabase-js@2'];
+  for(const src of sources){
+    try{ await loadScriptOnce(src); if(window.supabase && window.supabase.createClient) return; }catch(e){}
+  }
+  throw new Error('Không tải được thư viện đăng nhập');
+}
+function normalizeCloudData(d){
+  d = (d && typeof d==='object')? d : {};
+  return { materials:d.materials||[], lots:d.lots||[], samples:d.samples||[], results:d.results||[] };
+}
+function cloudDataIsEmpty(d){ return !d || !Array.isArray(d.materials); }
+function applyCloudRow(row){
+  cloudVersion = row.version;
+  DB = normalizeCloudData(row.data);
+  migrateSamplesIfNeeded();
+}
+async function fetchCloudRow(){
+  const {data, error} = await sb.from('app_data').select('data,version').eq('id',1).maybeSingle();
+  if(error) throw error;
+  return data;
+}
+async function fetchProfile(){
+  const {data, error} = await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+  if(error) throw error;
+  return data;
+}
+function setCloudStatus(kind){
+  const el = document.getElementById('cloud-status'); if(!el) return;
+  el.textContent = kind==='saving'? 'Đang lưu…' : kind==='saved'? '✓ Đã lưu lên đám mây' : kind==='error'? '⚠ Lỗi đồng bộ' : '';
+}
+function scheduleCloudPush(){
+  clearTimeout(cloudSaveTimer);
+  setCloudStatus('saving');
+  cloudSaveTimer = setTimeout(()=>{ cloudSaveTimer = null; pushCloud(); }, 600);
+}
+/** Ghi toàn bộ dữ liệu lên đám mây, kèm kiểm tra phiên bản: nếu giữa chừng có người khác đã lưu,
+ *  bản ghi sẽ KHÔNG bị đè — app tải lại bản mới nhất và báo cho người dùng. */
+async function pushCloud(){
+  if(cloudPushing){ cloudPushQueued = true; return; }
+  cloudPushing = true;
+  try{
+    const {data, error} = await sb.from('app_data')
+      .update({ data: DB, version: cloudVersion+1, updated_by: session.user.id, updated_at: new Date().toISOString() })
+      .eq('id',1).eq('version', cloudVersion).select('version');
+    if(error) throw error;
+    if(!data || data.length===0){ cloudPushQueued = false; await handleCloudConflict(); }
+    else { cloudVersion = data[0].version; setCloudStatus('saved'); }
+  }catch(e){
+    console.error(e); setCloudStatus('error');
+    showToast('Không lưu được lên đám mây: '+(e.message||e));
+  }finally{
+    cloudPushing = false;
+    if(cloudPushQueued){ cloudPushQueued = false; scheduleCloudPush(); }
+  }
+}
+async function handleCloudConflict(){
+  const row = await fetchCloudRow();
+  if(row && row.version!==cloudVersion){
+    applyCloudRow(row); renderMain(); setCloudStatus('');
+    showToast('Có người vừa cập nhật dữ liệu. Đã tải bản mới nhất — thao tác vừa rồi của bạn có thể cần làm lại.');
+  } else {
+    setCloudStatus('error');
+    showToast('Bạn không có quyền sửa dữ liệu (hoặc quyền vừa bị thay đổi).');
+  }
+}
+async function refreshFromCloud(force){
+  if(!force && (activeModal || cloudSaveTimer || cloudPushing)) return;
+  try{
+    const row = await fetchCloudRow();
+    if(row && (force || row.version>cloudVersion)){
+      applyCloudRow(row); renderMain();
+      if(force) showToast('Đã tải lại dữ liệu mới nhất.');
+    }
+  }catch(e){ console.error(e); if(force) showToast('Không tải lại được: '+(e.message||e)); }
+}
+function startRealtime(){
+  if(realtimeStarted) return;
+  realtimeStarted = true;
+  try{
+    sb.channel('app_data_changes')
+      .on('postgres_changes', {event:'UPDATE', schema:'public', table:'app_data'}, async (payload)=>{
+        const row = payload.new;
+        if(!row || typeof row.version!=='number' || row.version<=cloudVersion) return;
+        if(cloudPushing && session && row.updated_by===session.user.id) return; // tiếng vọng của chính lần lưu của mình
+        if(activeModal || cloudSaveTimer || cloudPushing) return;
+        let full = row;
+        if(!row.data){ try{ full = await fetchCloudRow(); }catch(e){ return; } }
+        if(!full || full.version<=cloudVersion) return;
+        applyCloudRow(full); renderMain();
+        showToast('Dữ liệu vừa được cập nhật bởi người khác.');
+      }).subscribe();
+  }catch(e){ console.error(e); }
+  document.addEventListener('visibilitychange', async ()=>{
+    if(document.visibilityState!=='visible' || !session || !profile) return;
+    try{
+      const p = await fetchProfile();
+      if(p && p.role!==profile.role){ await bootAfterAuth(); return; }
+    }catch(e){}
+    refreshFromCloud(false);
+  });
+}
+
+function hideSidebar(){ document.getElementById('sidebar').style.display='none'; document.body.classList.remove('readonly'); }
+function translateAuthError(err){
+  const m = (err && err.message) || String(err);
+  if(/Invalid login credentials/i.test(m)) return 'Sai email hoặc mật khẩu.';
+  if(/Email not confirmed/i.test(m)) return 'Email chưa được xác nhận — hãy kiểm tra hộp thư.';
+  if(/already registered/i.test(m)) return 'Email này đã được đăng ký.';
+  if(/at least \d+ characters/i.test(m)) return 'Mật khẩu quá ngắn (tối thiểu 6 ký tự).';
+  if(/valid email|invalid format/i.test(m)) return 'Email không hợp lệ.';
+  return m;
+}
+function renderAuth(msg, mode){
+  mode = mode || 'login';
+  hideSidebar();
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="auth-wrap"><div class="card auth-card">
+      <h1 class="page-title" style="font-size:19px;">Quản lý lấy mẫu vật liệu</h1>
+      <p class="page-desc" style="margin-bottom:12px;">${mode==='login'? 'Đăng nhập để xem dữ liệu.' : 'Tạo tài khoản mới. Sau khi đăng ký, cần quản trị viên duyệt thì mới xem/sửa được dữ liệu.'}</p>
+      <div class="auth-msg" id="au-msg" style="${msg?'':'display:none;'}">${esc(msg||'')}</div>
+      ${mode==='register'? `<label>Họ tên</label><input type="text" id="au-name" autocomplete="name">` : ''}
+      <label>Email</label><input type="email" id="au-email" autocomplete="username">
+      <label>Mật khẩu</label><input type="password" id="au-pass" autocomplete="${mode==='login'?'current-password':'new-password'}">
+      <div class="form-actions">
+        <button class="btn" id="au-submit">${mode==='login'? 'Đăng nhập' : 'Đăng ký'}</button>
+        <button class="btn secondary" id="au-switch">${mode==='login'? 'Tạo tài khoản mới' : 'Đã có tài khoản'}</button>
+      </div>
+    </div></div>`;
+  const setMsg = (t)=>{ const el = document.getElementById('au-msg'); if(el){ el.textContent = t; el.style.display = t? '' : 'none'; } };
+  const submitBtn = main.querySelector('#au-submit');
+  async function submit(){
+    const email = val('au-email'), pass = document.getElementById('au-pass').value;
+    if(!email || !pass){ setMsg('Vui lòng nhập email và mật khẩu.'); return; }
+    submitBtn.disabled = true;
+    try{
+      if(mode==='login'){
+        const {error} = await sb.auth.signInWithPassword({email, password:pass});
+        if(error){ setMsg(translateAuthError(error)); return; }
+        await bootAfterAuth();
+      } else {
+        const name = val('au-name');
+        const {data, error} = await sb.auth.signUp({email, password:pass, options:{data:{full_name:name}}});
+        if(error){ setMsg(translateAuthError(error)); return; }
+        if(data && data.session){ await bootAfterAuth(); }
+        else renderAuth('Đã đăng ký. Hãy kiểm tra email để xác nhận tài khoản, rồi quay lại đăng nhập.', 'login');
+      }
+    }catch(e){ setMsg(translateAuthError(e)); }
+    finally{ submitBtn.disabled = false; }
+  }
+  submitBtn.addEventListener('click', submit);
+  main.querySelector('#au-switch').addEventListener('click', ()=>renderAuth('', mode==='login'?'register':'login'));
+  ['au-email','au-pass','au-name'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
+  });
+}
+function renderPending(){
+  hideSidebar();
+  document.getElementById('main').innerHTML = `
+    <div class="auth-wrap"><div class="card auth-card">
+      <h1 class="page-title" style="font-size:19px;">Tài khoản đang chờ duyệt</h1>
+      <p class="page-desc" style="margin:6px 0 14px 0;">Tài khoản <b>${esc(profile? profile.email : '')}</b> đã được tạo nhưng chưa được quản trị viên duyệt. Hãy báo quản trị viên cấp quyền, sau đó bấm "Kiểm tra lại".</p>
+      <div class="form-actions">
+        <button class="btn" id="pd-recheck">Kiểm tra lại</button>
+        <button class="btn secondary" id="pd-logout">Đăng xuất</button>
+      </div>
+    </div></div>`;
+  document.getElementById('pd-recheck').addEventListener('click', ()=>bootAfterAuth());
+  document.getElementById('pd-logout').addEventListener('click', ()=>doSignOut());
+}
+function renderFatal(msg){
+  hideSidebar();
+  document.getElementById('main').innerHTML = `
+    <div class="auth-wrap"><div class="card auth-card">
+      <h1 class="page-title" style="font-size:19px;">Không vào được ứng dụng</h1>
+      <p class="page-desc" style="margin:6px 0 14px 0;">${esc(msg)}</p>
+      <div class="form-actions"><button class="btn" id="ft-retry">Thử lại</button></div>
+    </div></div>`;
+  document.getElementById('ft-retry').addEventListener('click', ()=>location.reload());
+}
+async function doSignOut(){
+  try{ await sb.auth.signOut(); }catch(e){}
+  session = null; profile = null;
+  renderAuth();
+}
+/** Sau khi đăng nhập (hoặc khi mở lại trang đã đăng nhập): đọc vai trò, tải dữ liệu, dựng giao diện theo quyền. */
+async function bootAfterAuth(){
+  try{
+    const res = await sb.auth.getSession();
+    session = res.data && res.data.session;
+    if(!session){ profile = null; renderAuth(); return; }
+    profile = await fetchProfile();
+    if(!profile){ renderFatal('Chưa có hồ sơ cho tài khoản này. Hãy chạy file supabase_setup.sql trong Supabase rồi đăng nhập lại.'); return; }
+    if(profile.role==='pending'){ renderPending(); return; }
+
+    const row = await fetchCloudRow();
+    if(!row){ renderFatal('Không tìm thấy bảng dữ liệu app_data. Hãy chạy file supabase_setup.sql trong Supabase.'); return; }
+    if(cloudDataIsEmpty(row.data)){
+      cloudVersion = row.version;
+      if(canEdit()){
+        let localDB = null;
+        try{ const raw = localStorage.getItem(STORAGE_KEY); if(raw) localDB = JSON.parse(raw); }catch(e){}
+        if(localDB && Array.isArray(localDB.materials) && confirm('Đám mây chưa có dữ liệu. Tải dữ liệu đang lưu trên máy này lên đám mây?')){
+          DB = normalizeCloudData(localDB);
+        } else {
+          DB = defaultData();
+        }
+        migrateSamplesIfNeeded();
+        await pushCloud();
+      } else {
+        DB = normalizeCloudData(null);
+      }
+    } else {
+      applyCloudRow(row);
+    }
+    document.body.classList.toggle('readonly', !canEdit());
+    if(!visibleTabs().some(t=>t.id===state.tab)) state.tab = 'dashboard';
+    document.getElementById('sidebar').style.display = '';
+    renderSidebar(); renderMain(); startRealtime();
+  }catch(e){
+    console.error(e);
+    renderFatal('Lỗi kết nối: '+(e.message||e));
+  }
+}
+async function renderUsers(main){
+  main.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">Quản lý người dùng</h1>
+      <p class="page-desc">Duyệt tài khoản mới và phân quyền: Chỉ xem / Được nhập-sửa / Quản trị. Tài khoản "Chờ duyệt" chưa xem được dữ liệu.</p>
+    </div>
+    <div class="card" id="users-card"><div class="empty">Đang tải…</div></div>`;
+  let data = null, error = null;
+  try{
+    const res = await sb.from('profiles').select('*').order('created_at',{ascending:true});
+    data = res.data; error = res.error;
+  }catch(e){ error = e; }
+  if(state.tab!=='users') return;
+  const card = document.getElementById('users-card'); if(!card) return;
+  if(error){ card.innerHTML = `<div class="empty" style="color:var(--red);">Không tải được danh sách: ${esc(error.message||error)}</div>`; return; }
+  const pendingCount = data.filter(u=>u.role==='pending').length;
+  const sorted = data.slice().sort((a,b)=> (a.role==='pending'?0:1)-(b.role==='pending'?0:1));
+  card.innerHTML = `
+    ${pendingCount? `<div class="auth-msg">${pendingCount} tài khoản đang chờ duyệt</div>` : ''}
+    <table>
+      <thead><tr><th>Email</th><th>Họ tên</th><th>Ngày đăng ký</th><th>Quyền</th><th></th></tr></thead>
+      <tbody>
+        ${sorted.map(u=>{
+          const me = session && u.id===session.user.id;
+          return `<tr>
+            <td>${esc(u.email)}</td><td>${esc(u.full_name)||'—'}</td><td>${esc((u.created_at||'').slice(0,10))}</td>
+            <td>${me? `<span class="badge ok">${ROLE_LABELS[u.role]} (bạn)</span>` :
+              `<select data-role-sel="${u.id}" style="width:auto;">${Object.keys(ROLE_LABELS).map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${ROLE_LABELS[r]}</option>`).join('')}</select>`}</td>
+            <td>${me? '' : `<button class="btn small" data-role-save="${u.id}">Lưu</button>`}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  card.querySelectorAll('[data-role-save]').forEach(b=>b.addEventListener('click', async ()=>{
+    const id = b.dataset.roleSave;
+    const sel = card.querySelector(`[data-role-sel="${id}"]`);
+    const {error: upErr} = await sb.from('profiles').update({role: sel.value}).eq('id', id);
+    if(upErr){ showToast('Không đổi được quyền: '+(upErr.message||upErr)); return; }
+    showToast('Đã cập nhật quyền.');
+    renderUsers(main);
+  }));
+}
+
+/* ==========================================================
    RENDER ARCHITECTURE — sidebar renders once, #main redraws
    per tab, and modals live entirely outside the render cycle
    so typing inside a form never gets interrupted mid-keystroke.
    ========================================================== */
 function renderSidebar(){
   const sidebar = document.getElementById('sidebar');
+  const tabs = visibleTabs();
   sidebar.innerHTML = `
     <div class="brand">
       <div class="brand-title">Quản lý lấy mẫu vật liệu</div>
       <div class="brand-sub">Hạ tầng đường đô thị</div>
     </div>
-    ${TABS.map(t=>`<div class="nav-item ${state.tab===t.id?'active':''}" data-tab="${t.id}"><span class="nav-icon">${t.icon}</span>${t.label}</div>`).join('')}
+    ${tabs.map(t=>`<div class="nav-item ${state.tab===t.id?'active':''}" data-tab="${t.id}"><span class="nav-icon">${t.icon}</span>${t.label}</div>`).join('')}
+    ${CLOUD && profile? `
+    <div class="side-footer">
+      <div class="hide-mobile">${esc(profile.email||'')}</div>
+      <div class="hide-mobile" style="margin:2px 0 6px 0;">${esc(ROLE_LABELS[profile.role]||'')}</div>
+      <div id="cloud-status" class="hide-mobile" style="margin-bottom:8px;"></div>
+      <div class="row-flex"><button class="btn secondary small" id="btn-reload">Tải lại</button><button class="btn secondary small" id="btn-logout">Đăng xuất</button></div>
+    </div>` : ''}
   `;
-  sidebar.addEventListener('click', (e)=>{
-    const item = e.target.closest('.nav-item'); if(!item) return;
-    if(state.tab === item.dataset.tab) return;
-    state.tab = item.dataset.tab;
-    sidebar.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active', el.dataset.tab===state.tab));
-    renderMain();
-  });
+  if(!sidebarBound){
+    sidebarBound = true;
+    sidebar.addEventListener('click', (e)=>{
+      const item = e.target.closest('.nav-item'); if(!item) return;
+      if(state.tab === item.dataset.tab) return;
+      state.tab = item.dataset.tab;
+      sidebar.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active', el.dataset.tab===state.tab));
+      renderMain();
+    });
+  }
+  sidebar.querySelector('#btn-logout')?.addEventListener('click', ()=>doSignOut());
+  sidebar.querySelector('#btn-reload')?.addEventListener('click', ()=>refreshFromCloud(true));
 }
 function renderMain(){
   const main = document.getElementById('main');
@@ -345,6 +671,7 @@ function renderMain(){
   else if(state.tab==='lots') renderLots(main);
   else if(state.tab==='sampling') renderSampling(main);
   else if(state.tab==='excel') renderExcel(main);
+  else if(state.tab==='users') renderUsers(main);
 }
 
 /** Materials that have at least one đợt nhập hàng or tần suất, used for the Tổng quan roll-up. */
@@ -576,7 +903,7 @@ function renderLots(main){
       <p class="page-desc">Mỗi đợt ứng với một lần nhập vật liệu về công trường — dùng để theo dõi khối lượng, không tự tạo tần suất.</p>
     </div>
     <div class="card" id="xlsx-status-card-lots" style="display:flex;align-items:center;gap:10px;"></div>
-    <div class="card">
+    <div class="card" id="lots-excel-card">
       <div class="card-title">Nhập khối lượng từ Excel <span class="muted" style="font-weight:400;">Chỉ thêm đợt mới — không sửa/đè dữ liệu đã có</span></div>
       <p class="muted">Cột cần có: Vật liệu, Nhà cung cấp, Khối lượng, Ngày nhập, Vị trí/phân khu (tuỳ chọn) — giống hệt các trường trong form "+ Thêm đợt nhập hàng" bên dưới.</p>
       <input type="file" id="lots-excel-file" accept=".xlsx,.xls,.xlsm">
@@ -1464,9 +1791,14 @@ function closeModal(){
 /* ---------- init ---------- */
 (async function init(){
   document.getElementById('main').innerHTML = `<div style="padding:60px 20px;text-align:center;color:#5B6470;">Đang tải dữ liệu…</div>`;
-  renderSidebar();
-  await loadData();
-  renderMain();
+  if(!CLOUD){ renderSidebar(); await loadData(); renderMain(); return; }
+  hideSidebar();
+  try{
+    await loadSupabaseLib();
+    sb = window.supabase.createClient(APP_CFG.SUPABASE_URL, APP_CFG.SUPABASE_ANON_KEY);
+  }catch(e){ renderFatal('Không tải được thư viện đăng nhập (cần kết nối Internet). '+(e.message||'')); return; }
+  sb.auth.onAuthStateChange((evt)=>{ if(evt==='SIGNED_OUT' && session){ session = null; profile = null; renderAuth(); } });
+  await bootAfterAuth();
 })();
 </script>
 </body>

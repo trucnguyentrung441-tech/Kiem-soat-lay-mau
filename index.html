@@ -105,7 +105,7 @@
   .progress-bar{width:100%;height:9px;border-radius:5px;background:#C7D99A;overflow:hidden;}
   .progress-fill{height:100%;background:var(--green);transition:width .25s ease;}
   .progress-fill.warn{background:var(--amber);}
-  .freq-chip{font-family:var(--mono);font-size:12.1px;font-weight:700;background:var(--navy-2);color:#fff;border-radius:4px;padding:3px 7px;}
+  .freq-chip{font-family:var(--mono);font-size:12.1px;font-weight:700;background:var(--navy-2);color:#fff;border-radius:4px;padding:3px 7px;display:inline-block;max-width:210px;white-space:normal;line-height:1.3;text-align:center;}
   .close-x{cursor:pointer;color:var(--ink-soft);font-size:17.6px;background:none;border:none;}
   .modal-backdrop{position:fixed;inset:0;background:rgba(20,25,32,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow:auto;z-index:50;}
   .modal{background:var(--paper);border:1px solid var(--line);border-radius:8px;max-width:640px;width:100%;padding:22px 24px;}
@@ -139,14 +139,17 @@
   }
 
   /* --- bố cục chữ: không bẻ từ, không rớt chữ lẻ, hàng bảng thẳng đều --- */
-  p,.page-desc,.muted,.lot-meta,.progress-sub,.stat-label,.empty,.card-title,.page-title,.lot-name,.progress-name,summary,td,th,label,.badge,.btn{overflow-wrap:normal;word-break:keep-all;hyphens:none;}
+  p,.page-desc,.muted,.lot-meta,.progress-sub,.stat-label,.empty,.card-title,.page-title,.lot-name,.progress-name,summary,label,.badge,.btn{overflow-wrap:normal;word-break:keep-all;hyphens:none;}
+  td,th{overflow-wrap:break-word;hyphens:none;}
   .page-desc,.lot-meta,.progress-sub,.empty,p{text-wrap:pretty;}
   .page-title,.card-title,.stat-label,.lot-name,.progress-name,summary{text-wrap:balance;}
   .card,.lot-group-body{overflow-x:auto;}
-  table{width:100%;min-width:max-content;}
-  th{white-space:nowrap;}
-  td{vertical-align:middle;}
-  td.row-flex{display:table-cell !important;white-space:nowrap;}
+  table{width:100%;table-layout:auto;}
+  th{white-space:normal;vertical-align:bottom;line-height:1.25;}
+  td{vertical-align:middle;min-width:70px;line-height:1.35;}
+  td.nw,td .badge,td .btn{white-space:nowrap;}
+  td.mono{min-width:60px;}
+  td.row-flex{display:table-cell !important;white-space:nowrap;min-width:0;}
   td.row-flex .btn{margin-right:6px;}
   td.row-flex .btn:last-child{margin-right:0;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -200,22 +203,44 @@ function sampleFreqCount(s){
   return matches? matches.length : 1;
 }
 function sumFreqCount(samples){ return samples.reduce((a,s)=>a+sampleFreqCount(s), 0); }
-/** Parses labels like "TS1", "TS2, TS3", "TS5,TS6", "ĐV", "NN" from a project's own "Tần suất"
- *  column into a spelled-out label such as "Tần suất 2, Tần suất 3". Unrecognized text is kept as-is. */
+/** Hiểu nhãn tần suất người dùng gõ hoặc lấy từ Excel và viết đầy đủ thành "Tần suất N".
+ *  Nhận: "TS1", "5", "Tần suất 5", "TS2, TS3", "TS3-TS5" / "3 đến 5" (khoảng -> liệt kê từng số),
+ *  "ĐV" (Đầu vào), "NN" (Nghi ngờ). Chữ không nhận ra được thì giữ nguyên. */
 function parseTanSuatLabel(raw){
   const s = (raw||'').toString().trim();
   if(!s) return '';
-  const upper = stripDiacritics(s).toUpperCase();
-  if(upper==='DV') return 'Đầu vào';
-  if(upper==='NN') return 'Nghi ngờ / thử lại';
-  const parts = s.split(',').map(p=>p.trim()).filter(Boolean);
+  const upper = stripDiacritics(s).toUpperCase().replace(/[\s.]/g,'');
+  if(upper==='DV' || upper==='DAUVAO') return 'Đầu vào';
+  if(upper==='NN' || upper==='NGHINGO') return 'Nghi ngờ / thử lại';
+  const parts = s.split(/[,;]/).map(p=>p.trim()).filter(Boolean);
   if(parts.length===0) return '';
-  const labels = parts.map(p=>{
-    const m = p.match(/^TS\s*0*(\d+)$/i);
-    return m? ('Tần suất ' + parseInt(m[1],10)) : p;
+  const labels = [];
+  parts.forEach(p=>{
+    const flat = stripDiacritics(p).toUpperCase().replace(/\s+/g,' ').trim();
+    const range = flat.match(/^(?:TS|TAN SUAT)?\s*0*(\d+)\s*(?:-|–|—|DEN|->|\.\.)\s*(?:TS|TAN SUAT)?\s*0*(\d+)$/);
+    if(range){
+      const lo = parseInt(range[1],10), hi = parseInt(range[2],10);
+      if(hi>=lo && hi-lo<=60){ for(let n=lo;n<=hi;n++) labels.push('Tần suất '+n); return; }
+    }
+    const one = flat.match(/^(?:TS|TAN SUAT)?\s*0*(\d+)$/);
+    if(one){ labels.push('Tần suất '+parseInt(one[1],10)); return; }
+    labels.push(p);
   });
   return labels.join(', ');
 }
+/** Các số tần suất mà một mẫu đang đại diện (từ nhãn "Tần suất N"; mẫu cũ chưa có nhãn thì lấy theo số thứ tự). */
+function sampleFreqNumbers(smp){
+  const label = (smp.freqLabelOverride||'').trim();
+  if(!label) return [smp.freqIndex];
+  return (label.match(/Tần suất \d+/g)||[]).map(x=>parseInt(x.replace(/\D/g,''),10));
+}
+/** Số tần suất tiếp theo của một nhóm = số lớn nhất đã dùng + 1 (VD: đã có dòng "Tần suất 3, Tần suất 4" -> tiếp theo là 5). */
+function nextFreqNumber(materialId, supplier){
+  let max = 0;
+  samplesForGroup(materialId, supplier).forEach(smp=>sampleFreqNumbers(smp).forEach(n=>{ if(n>max) max=n; }));
+  return max+1;
+}
+function nextFreqLabel(materialId, supplier){ return 'Tần suất '+nextFreqNumber(materialId, supplier); }
 
 function defaultData(){
   return {
@@ -813,8 +838,8 @@ function renderDashboard(main){
                       <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
                       <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
                       <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
-                      <td>${esc(r.s.dateTaken)||'—'}</td>
-                      <td>${esc(r.s.ngayKQTN)||'—'}</td>
+                      <td class="nw">${esc(r.s.dateTaken)||'—'}</td>
+                      <td class="nw">${esc(r.s.ngayKQTN)||'—'}</td>
                       <td><span class="badge ${r.st.key==='pending'?'pending':r.st.key==='taken'?'taken':r.st.key}">${r.st.label}</span></td>
                     </tr>`;
                   }).join('')}
@@ -1072,7 +1097,7 @@ function renderLots(main){
                 <td>${esc(it.nhaCungCap)}</td>
                 <td class="mono">${fmtQty(it.quantity)}</td>
                 <td>${esc(it.viTri)||'—'}</td>
-                <td>${esc(it.ngayNhap)||'—'}</td>
+                <td class="nw">${esc(it.ngayNhap)||'—'}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -1083,7 +1108,7 @@ function renderLots(main){
           <summary class="muted" style="cursor:pointer;">Xem ${dupItems.length} đợt đã bỏ qua vì đã có sẵn</summary>
           <table style="margin-top:8px;">
             <thead><tr><th>Vật liệu</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Ngày nhập</th></tr></thead>
-            <tbody>${dupItems.map(it=>`<tr><td>${esc(it.vatLieuName)}</td><td>${esc(it.nhaCungCap)}</td><td class="mono">${fmtQty(it.quantity)}</td><td>${esc(it.ngayNhap)||'—'}</td></tr>`).join('')}</tbody>
+            <tbody>${dupItems.map(it=>`<tr><td>${esc(it.vatLieuName)}</td><td>${esc(it.nhaCungCap)}</td><td class="mono">${fmtQty(it.quantity)}</td><td class="nw">${esc(it.ngayNhap)||'—'}</td></tr>`).join('')}</tbody>
           </table>
         </details>` : ''}
       </div>
@@ -1251,10 +1276,10 @@ function renderSampling(main){
                       <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
                       <td>${esc(s.location)||'—'}</td>
                       <td>${esc(s.personTaken)||'—'}</td>
-                      <td>${esc(s.dateTaken)||'—'}</td>
+                      <td class="nw">${esc(s.dateTaken)||'—'}</td>
                       <td class="mono">${esc(s.soKQTN)||'—'}</td>
                       <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
-                      <td>${esc(s.ngayKQTN)||'—'}</td>
+                      <td class="nw">${esc(s.ngayKQTN)||'—'}</td>
                       <td><span class="badge ${st.key==='pending'?'pending':st.key==='taken'?'taken':st.key}">${st.label}</span></td>
                       <td class="row-flex">
                         <button class="btn secondary small" data-samp="${s.id}">${s.status==='chua_lay'?'Nhập':'Sửa'}</button>
@@ -1300,6 +1325,8 @@ function openNewFrequencyModal(){
         <div><label>Nhà cung cấp</label><input type="text" id="nf-supplier" list="dl-suppliers-nf" placeholder="VD: Công ty CP VLXD ABC"></div>
       </div>
       <datalist id="dl-suppliers-nf">${distinctSuppliers().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
+      <label>Tần suất <span class="muted" style="font-weight:400;">— tự gợi ý số tiếp theo của nhóm, sửa được. VD: Tần suất 5 · TS5-TS6 (gộp)</span></label>
+      <input type="text" id="nf-freq" placeholder="VD: Tần suất 5">
       <div class="grid2">
         <div><label>Số BBNT</label><input type="text" id="nf-code" placeholder="VD: BBNT-01"></div>
         <div><label>Khối lượng đại diện</label><input type="text" id="nf-qty" placeholder="VD: 500 m³"></div>
@@ -1320,6 +1347,16 @@ function openNewFrequencyModal(){
       <label>Ghi chú</label>
       <textarea id="nf-note"></textarea>
     `,
+    afterRender: ()=>{
+      const matSel = document.getElementById('nf-mat'), sup = document.getElementById('nf-supplier'), fr = document.getElementById('nf-freq');
+      let touched = false;
+      function suggest(){ if(!touched) fr.value = nextFreqLabel(matSel.value, sup.value.trim()); }
+      matSel.addEventListener('change', suggest);
+      sup.addEventListener('input', suggest);
+      sup.addEventListener('change', suggest);
+      fr.addEventListener('input', ()=>{ touched = true; });
+      suggest();
+    },
     onSave: ()=>{
       const materialId = document.getElementById('nf-mat').value;
       const supplier = val('nf-supplier');
@@ -1332,7 +1369,7 @@ function openNewFrequencyModal(){
         sampleCode: val('nf-code'), quantity: val('nf-qty'),
         dateTaken: document.getElementById('nf-date').value, personTaken: val('nf-person'),
         location: val('nf-loc'), soKQTN: val('nf-sokqtn'), phongThiNghiem: val('nf-lab'),
-        ngayKQTN: document.getElementById('nf-ngaykqtn').value, note: val('nf-note'), freqLabelOverride:'',
+        ngayKQTN: document.getElementById('nf-ngaykqtn').value, note: val('nf-note'), freqLabelOverride: parseTanSuatLabel(val('nf-freq')) || nextFreqLabel(materialId, supplier),
         status: document.getElementById('nf-date').value? 'da_lay':'chua_lay'
       };
       DB.samples.push(s);
@@ -1349,6 +1386,8 @@ function openSampleModal(id){
     title: `Lấy mẫu — ${mat?mat.name:''} — ${esc(s.supplier)||'Chưa rõ NCC'} — ${sampleFreqLabel(s)}`,
     focusId: 's-code',
     body: `
+      <label>Tần suất <span class="muted" style="font-weight:400;">— sửa được. VD: Tần suất 5 · TS3-TS4 (gộp nhiều tần suất) · ĐV · NN · để trống = tự đánh số</span></label>
+      <input type="text" id="s-freq" value="${esc(sampleFreqLabel(s))}">
       <div class="grid2">
         <div><label>Số BBNT</label><input type="text" id="s-code" value="${esc(s.sampleCode)}" placeholder="VD: BBNT-01"></div>
         <div><label>Khối lượng đại diện</label><input type="text" id="s-qty" value="${esc(s.quantity)}" placeholder="VD: 500 m³"></div>
@@ -1370,6 +1409,8 @@ function openSampleModal(id){
       <textarea id="s-note">${esc(s.note)}</textarea>
     `,
     onSave: ()=>{
+      const freqParsed = parseTanSuatLabel(val('s-freq'));
+      if(freqParsed !== parseTanSuatLabel(sampleFreqLabel(s))) s.freqLabelOverride = freqParsed; // chỉ đổi khi người dùng thật sự sửa
       s.sampleCode = val('s-code');
       s.quantity = val('s-qty');
       s.dateTaken = document.getElementById('s-date').value;
@@ -1712,7 +1753,7 @@ function renderExcel(main){
                 <td>${esc(it.vatLieuName)}</td>
                 <td>${esc(it.nhaCungCap)}</td>
                 <td class="mono">${esc(it.soBBNT)||'—'}</td>
-                <td>${esc(it.ngayLayMau)||'—'}</td>
+                <td class="nw">${esc(it.ngayLayMau)||'—'}</td>
                 <td class="mono">${esc(it.soKQTN)||'—'}</td>
                 <td class="muted">${esc(it.phongThiNghiem)||'—'}</td>
               </tr>`).join('')}

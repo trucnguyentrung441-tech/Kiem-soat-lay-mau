@@ -105,7 +105,8 @@
   .progress-bar{width:100%;height:9px;border-radius:5px;background:#C7D99A;overflow:hidden;}
   .progress-fill{height:100%;background:var(--green);transition:width .25s ease;}
   .progress-fill.warn{background:var(--amber);}
-  .freq-chip{font-family:var(--mono);font-size:12.1px;font-weight:700;background:var(--navy-2);color:#fff;border-radius:4px;padding:3px 7px;display:inline-block;max-width:210px;white-space:normal;line-height:1.3;text-align:center;}
+  .freq-chip{font-family:var(--mono);font-size:12.1px;font-weight:700;background:var(--navy-2);color:#fff;border-radius:4px;padding:3px 7px;display:inline-block;white-space:nowrap;line-height:1.35;text-align:center;}
+  .freq-chip .fc-line{display:block;white-space:nowrap;}
   .close-x{cursor:pointer;color:var(--ink-soft);font-size:17.6px;background:none;border:none;}
   .modal-backdrop{position:fixed;inset:0;background:rgba(20,25,32,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow:auto;z-index:50;}
   .modal{background:var(--paper);border:1px solid var(--line);border-radius:8px;max-width:640px;width:100%;padding:22px 24px;}
@@ -191,6 +192,11 @@ function freqLabel(n){ return 'Tần suất ' + String(n).padStart(2,'0'); }
 /** Shows the tần suất label a sample should display: the label parsed from Excel's "Tần suất"
  *  column when available (handles combined ones like "Tần suất 2, Tần suất 3", or "Đầu vào" /
  *  "Nghi ngờ"), otherwise falls back to the app's own auto-numbered "Tần suất 0X". */
+/** Thẻ tần suất: mỗi "Tần suất N" luôn nằm trọn trên một dòng; chỉ khi gộp nhiều tần suất mới xuống dòng giữa các tần suất. */
+function freqChipHtml(label){
+  const parts = String(label||'').split(/,\s*/).filter(Boolean);
+  return `<span class="freq-chip">${parts.map(p=>`<span class="fc-line">${esc(p)}</span>`).join('')}</span>`;
+}
 function sampleFreqLabel(s){ return s.freqLabelOverride? s.freqLabelOverride : freqLabel(s.freqIndex); }
 /** How many "tần suất" a sample actually represents — not "1 dòng = 1 tần suất":
  *  "Đầu vào" / "Nghi ngờ / thử lại" đếm là 0 (không phải một tần suất định kỳ), một nhãn gộp
@@ -832,10 +838,10 @@ function renderDashboard(main){
                     const daNghiemThu = !!(r.s.sampleCode && r.s.sampleCode.trim()!=='');
                     return `
                     <tr>
-                      <td><span class="freq-chip">${sampleFreqLabel(r.s)}</span></td>
+                      <td>${freqChipHtml(sampleFreqLabel(r.s))}</td>
                       <td>${esc(r.s.supplier)||'—'}</td>
                       <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
-                      <td>${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
+                      <td class="nw">${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
                       <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
                       <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
                       <td class="nw">${esc(r.s.dateTaken)||'—'}</td>
@@ -1271,8 +1277,8 @@ function renderSampling(main){
                     const st = sampleStatus(s);
                     return `
                     <tr>
-                      <td><span class="freq-chip">${sampleFreqLabel(s)}</span></td>
-                      <td class="mono">${esc(s.sampleCode)||'—'}</td>
+                      <td>${freqChipHtml(sampleFreqLabel(s))}</td>
+                      <td class="mono nw">${esc(s.sampleCode)||'—'}</td>
                       <td class="mono">${s.quantity? fmtQty(s.quantity) : '—'}</td>
                       <td>${esc(s.location)||'—'}</td>
                       <td>${esc(s.personTaken)||'—'}</td>
@@ -1749,10 +1755,10 @@ function renderExcel(main){
             ${newItems.map((it,i)=>`
               <tr>
                 <td><input type="checkbox" class="chk new-item-chk" data-i="${currentItems.indexOf(it)}" ${it.selected?'checked':''}></td>
-                <td>${it.freqLabelOverride? `<span class="freq-chip">${esc(it.freqLabelOverride)}</span>` : '<span class="muted">tự đánh số</span>'}</td>
+                <td>${it.freqLabelOverride? freqChipHtml(it.freqLabelOverride) : '<span class="muted">tự đánh số</span>'}</td>
                 <td>${esc(it.vatLieuName)}</td>
                 <td>${esc(it.nhaCungCap)}</td>
-                <td class="mono">${esc(it.soBBNT)||'—'}</td>
+                <td class="mono nw">${esc(it.soBBNT)||'—'}</td>
                 <td class="nw">${esc(it.ngayLayMau)||'—'}</td>
                 <td class="mono">${esc(it.soKQTN)||'—'}</td>
                 <td class="muted">${esc(it.phongThiNghiem)||'—'}</td>
@@ -1767,7 +1773,7 @@ function renderExcel(main){
           <table style="margin-top:8px;">
             <thead><tr><th>Vật liệu</th><th>Nhà cung cấp</th><th>Số BBNT</th><th>Lý do bỏ qua</th></tr></thead>
             <tbody>
-              ${dupItems.map(it=>`<tr><td>${esc(it.vatLieuName)}</td><td>${esc(it.nhaCungCap)}</td><td class="mono">${esc(it.soBBNT)||'—'}</td><td class="muted">${esc(it.reason)}</td></tr>`).join('')}
+              ${dupItems.map(it=>`<tr><td>${esc(it.vatLieuName)}</td><td>${esc(it.nhaCungCap)}</td><td class="mono nw">${esc(it.soBBNT)||'—'}</td><td class="muted">${esc(it.reason)}</td></tr>`).join('')}
             </tbody>
           </table>
         </details>` : ''}

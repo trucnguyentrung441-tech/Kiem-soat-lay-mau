@@ -49,11 +49,15 @@
   .stat.red .stat-num{color:var(--red);}
   .stat.navy .stat-num{color:var(--navy-2);}
   table{width:100%;border-collapse:collapse;font-size:14.3px;}
-  th{text-align:left;font-size:12.1px;color:var(--ink-soft);font-weight:600;border-bottom:1px solid var(--line);padding:8px 10px;}
-  td{padding:9px 10px;border-bottom:1px solid #CCDBA0;vertical-align:top;}
+  th{text-align:left;font-size:12.1px;color:var(--ink-soft);font-weight:600;border-bottom:1px solid var(--line);padding:8px 8px;}
+  td{padding:9px 8px;border-bottom:1px solid #CCDBA0;vertical-align:top;}
   tr:last-child td{border-bottom:none;}
   tr:hover td{background:#DAE8B0;}
   .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:12.1px;font-weight:600;white-space:nowrap;}
+  .badge.multi{border-radius:12px;padding:3px 10px;text-align:center;line-height:1.3;}
+  .badge .bl{display:block;white-space:nowrap;}
+  .ncc-head{margin:14px 0 6px 0;padding:5px 10px;font-weight:700;font-size:14.5px;color:var(--navy-2);border-left:3px solid var(--amber);background:rgba(21,42,67,.05);border-radius:0 4px 4px 0;line-height:1.4;}
+  .ncc-head:first-child{margin-top:8px;}
   .badge.pending{background:var(--amber-bg);color:var(--amber);}
   .badge.taken{background:var(--blue-bg);color:var(--slate);}
   .badge.pass{background:var(--green-bg);color:var(--green);}
@@ -196,6 +200,23 @@ function freqLabel(n){ return 'Tần suất ' + String(n).padStart(2,'0'); }
 function freqChipHtml(label){
   const parts = String(label||'').split(/,\s*/).filter(Boolean);
   return `<span class="freq-chip">${parts.map(p=>`<span class="fc-line">${esc(p)}</span>`).join('')}</span>`;
+}
+/** Nhãn trạng thái: nhãn dài "Đã lấy mẫu — chưa có KQTN" tách làm 2 dòng gọn ở chỗ gạch ngang, không bị bẻ giữa chừng. */
+function statusBadgeHtml(st){
+  const cls = st.key==='pending'?'pending':st.key==='taken'?'taken':st.key;
+  const lines = String(st.label||'').split(' — ');
+  return `<span class="badge ${cls}${lines.length>1?' multi':''}">${lines.map(l=>`<span class="bl">${esc(l)}</span>`).join('')}</span>`;
+}
+/** Gom các dòng theo nhà cung cấp (không phân biệt hoa/thường, khoảng trắng), giữ nguyên thứ tự. */
+function groupRowsBySupplier(rows, getSupplier){
+  const out = [];
+  rows.forEach(r=>{
+    const name = (getSupplier(r)||'').trim(), k = normSupplierKey(name);
+    let g = out.find(x=>x.k===k);
+    if(!g){ g = {k, name, rows:[]}; out.push(g); }
+    g.rows.push(r);
+  });
+  return out;
 }
 function sampleFreqLabel(s){ return s.freqLabelOverride? s.freqLabelOverride : freqLabel(s.freqIndex); }
 /** How many "tần suất" a sample actually represents — not "1 dòng = 1 tần suất":
@@ -831,26 +852,27 @@ function renderDashboard(main){
               <span class="lot-group-sub">${totalFreq} tần suất · ${hasKQTN} đã có KQTN</span>
             </summary>
             <div class="lot-group-body">
+              ${groupRowsBySupplier(items, r=>r.s.supplier).map(sg=>`
+              <div class="ncc-head">Nhà cung cấp: ${esc(sg.name)||'Chưa rõ'}</div>
               <table>
-                <thead><tr><th>Tần suất</th><th>Nhà cung cấp</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
+                <thead><tr><th>Tần suất</th><th>Khối lượng</th><th>Số BBNT</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày lấy mẫu</th><th>Ngày có KQTN</th><th>Trạng thái</th></tr></thead>
                 <tbody>
-                  ${items.map(r=>{
+                  ${sg.rows.map(r=>{
                     const daNghiemThu = !!(r.s.sampleCode && r.s.sampleCode.trim()!=='');
                     return `
                     <tr>
                       <td>${freqChipHtml(sampleFreqLabel(r.s))}</td>
-                      <td>${esc(r.s.supplier)||'—'}</td>
                       <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
                       <td class="nw">${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
                       <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
                       <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
                       <td class="nw">${esc(r.s.dateTaken)||'—'}</td>
                       <td class="nw">${esc(r.s.ngayKQTN)||'—'}</td>
-                      <td><span class="badge ${r.st.key==='pending'?'pending':r.st.key==='taken'?'taken':r.st.key}">${r.st.label}</span></td>
+                      <td>${statusBadgeHtml(r.st)}</td>
                     </tr>`;
                   }).join('')}
                 </tbody>
-              </table>
+              </table>`).join('')}
             </div>
           </details>`;
         }).join('')
@@ -1268,7 +1290,7 @@ function renderSampling(main){
               ${g.suppliers.map(a=>{
                 const samples = samplesForGroup(a.mat.id, a.supplier);
                 return `
-                <div style="margin:12px 0 4px 0;font-weight:700;font-size:12.5px;color:var(--navy-2);">Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</div>
+                <div class="ncc-head">Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</div>
                 ${samples.length===0? `<div class="empty">Chưa có tần suất nào.</div>` : `
                 <table>
                   <thead><tr><th>Tần suất</th><th>Số BBNT</th><th>Khối lượng</th><th>Vị trí</th><th>Người lấy mẫu</th><th>Ngày lấy mẫu</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày có KQTN</th><th>Trạng thái</th><th></th></tr></thead>
@@ -1286,7 +1308,7 @@ function renderSampling(main){
                       <td class="mono">${esc(s.soKQTN)||'—'}</td>
                       <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
                       <td class="nw">${esc(s.ngayKQTN)||'—'}</td>
-                      <td><span class="badge ${st.key==='pending'?'pending':st.key==='taken'?'taken':st.key}">${st.label}</span></td>
+                      <td>${statusBadgeHtml(st)}</td>
                       <td class="row-flex">
                         <button class="btn secondary small" data-samp="${s.id}">${s.status==='chua_lay'?'Nhập':'Sửa'}</button>
                         <button class="btn danger small" data-delsamp="${s.id}">Xoá</button>

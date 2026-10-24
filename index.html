@@ -56,7 +56,7 @@
   .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:12.1px;font-weight:600;white-space:nowrap;}
   .badge.multi{border-radius:12px;padding:3px 10px;text-align:center;line-height:1.3;}
   .badge .bl{display:block;white-space:nowrap;}
-  .ncc-head{margin:14px 0 6px 0;padding:5px 10px;font-weight:700;font-size:14.5px;color:var(--navy-2);border-left:3px solid var(--amber);background:rgba(21,42,67,.05);border-radius:0 4px 4px 0;line-height:1.4;}
+  .ncc-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 6px 0;padding:5px 10px;font-weight:700;font-size:14.5px;color:var(--navy-2);border-left:3px solid var(--amber);background:rgba(21,42,67,.05);border-radius:0 4px 4px 0;line-height:1.4;}
   .ncc-head:first-child{margin-top:8px;}
   .badge.pending{background:var(--amber-bg);color:var(--amber);}
   .badge.taken{background:var(--blue-bg);color:var(--slate);}
@@ -131,7 +131,7 @@
   /* --- chế độ đám mây: chỉ xem / đăng nhập --- */
   body.readonly #mat-add, body.readonly [data-edit], body.readonly [data-del],
   body.readonly #lot-add, body.readonly [data-editlot], body.readonly [data-dellot],
-  body.readonly [data-samp], body.readonly [data-delsamp], body.readonly #btn-new-freq,
+  body.readonly [data-samp], body.readonly [data-delsamp], body.readonly #btn-new-freq, body.readonly [data-addfreq-mat],
   body.readonly #lots-excel-card, body.readonly #xlsx-status-card-lots{display:none !important;}
   .side-footer{margin-top:auto;padding:14px 20px 4px 20px;border-top:1px solid var(--line);font-size:12.7px;color:var(--ink-soft);word-break:break-all;}
   .side-footer .btn{padding:4px 9px;font-size:12.1px;}
@@ -178,7 +178,7 @@ const TABS = [
 ];
 
 let DB = null;
-let state = { tab:'dashboard', filters:{} };
+let state = { tab:'dashboard', filters:{}, open:{} };
 let activeModal = null;
 
 function uid(p){ return (p||'id')+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -846,7 +846,7 @@ function renderDashboard(main){
           const totalFreq = sumFreqCount(items.map(r=>r.s));
           const hasKQTN = sumFreqCount(items.filter(r=>r.st.key==='pass').map(r=>r.s));
           return `
-          <details class="lot-group">
+          <details class="lot-group" data-gid="d:${g.mat.id}" ${state.open['d:'+g.mat.id]?'open':''}>
             <summary>
               <span>${esc(g.mat.name)}</span>
               <span class="lot-group-sub">${totalFreq} tần suất · ${hasKQTN} đã có KQTN</span>
@@ -967,7 +967,12 @@ function openMaterialModal(id){
 
 /* ---------- LOTS ---------- */
 function distinctSuppliers(){
-  return [...new Set(DB.lots.map(l=>l.supplier).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const seen = new Map();
+  DB.lots.concat(DB.samples).forEach(x=>{
+    const name = (x.supplier||'').trim();
+    if(name && !seen.has(normSupplierKey(name))) seen.set(normSupplierKey(name), name);
+  });
+  return [...seen.values()].sort((a,b)=>a.localeCompare(b));
 }
 function renderLots(main){
   const aggs = materialSupplierGroupsInUse().map(g=>aggregateForGroup(g.materialId, g.supplier)).filter(a=>a.mat); // bỏ qua nhóm mồ côi (vật liệu đã bị xoá) để tránh sập trang
@@ -1018,7 +1023,7 @@ function renderLots(main){
         return matGroups.map(g=>{
           const totalQty = g.lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
           return `
-          <details class="lot-group">
+          <details class="lot-group" data-gid="l:${g.mat.id}" ${state.open['l:'+g.mat.id]?'open':''}>
             <summary class="lot-group-summary">
               <span class="lot-group-name">${esc(g.mat.name)}</span>
               <span class="muted">${g.lots.length} đợt · tổng ${fmtQty(totalQty)} ${esc(g.mat.unit)}</span>
@@ -1281,16 +1286,17 @@ function renderSampling(main){
           const totalFreq = sumFreqCount(allSamples);
           const takenFreq = sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
           return `
-          <details class="lot-group">
+          <details class="lot-group" data-gid="s:${g.mat.id}" ${state.open['s:'+g.mat.id]?'open':''}>
             <summary>
               <span>${esc(g.mat.name)}</span>
               <span class="lot-group-sub">${g.suppliers.length} nhà cung cấp · ${totalFreq} tần suất · ${takenFreq} đã lấy</span>
             </summary>
             <div class="lot-group-body">
+              <div style="margin:8px 0 0 0;"><button class="btn secondary small" data-addfreq-mat="${g.mat.id}" data-addfreq-sup="">+ Thêm tần suất cho nhà cung cấp khác</button></div>
               ${g.suppliers.map(a=>{
                 const samples = samplesForGroup(a.mat.id, a.supplier);
                 return `
-                <div class="ncc-head">Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</div>
+                <div class="ncc-head"><span>Nhà cung cấp: ${esc(a.supplier)||'Chưa rõ'}</span><button class="btn small" data-addfreq-mat="${a.mat.id}" data-addfreq-sup="${esc(a.supplier)}">+ Thêm tần suất</button></div>
                 ${samples.length===0? `<div class="empty">Chưa có tần suất nào.</div>` : `
                 <table>
                   <thead><tr><th>Tần suất</th><th>Số BBNT</th><th>Khối lượng</th><th>Vị trí</th><th>Người lấy mẫu</th><th>Ngày lấy mẫu</th><th>Số KQTN</th><th>Phòng thí nghiệm</th><th>Ngày có KQTN</th><th>Trạng thái</th><th></th></tr></thead>
@@ -1327,6 +1333,7 @@ function renderSampling(main){
   main.querySelectorAll('[data-samp]').forEach(b=>b.addEventListener('click',()=>openSampleModal(b.dataset.samp)));
   main.querySelectorAll('[data-delsamp]').forEach(b=>b.addEventListener('click',()=>deleteSample(b.dataset.delsamp)));
   main.querySelector('#btn-new-freq')?.addEventListener('click', ()=>openNewFrequencyModal());
+  main.querySelectorAll('[data-addfreq-mat]').forEach(b=>b.addEventListener('click', ()=>openNewFrequencyModal({materialId:b.dataset.addfreqMat, supplier:b.dataset.addfreqSup||''})));
 }
 function deleteSample(sampleId){
   const s = sampleById(sampleId);
@@ -1341,17 +1348,19 @@ function deleteSample(sampleId){
 }
 /** Lets the user create a brand-new tần suất by hand — for a chosen vật liệu + nhà cung cấp,
  *  not tied to any đợt nhập hàng's khối lượng. */
-function openNewFrequencyModal(){
+function openNewFrequencyModal(prefill){
+  prefill = prefill || {};
   openModal({
     title: 'Tạo tần suất mới',
-    focusId: 'nf-supplier',
+    focusId: prefill.supplier? 'nf-code' : 'nf-supplier',
     body: `
       <div class="grid2">
         <div><label>Vật liệu</label>
-          <select id="nf-mat">${DB.materials.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select>
+          <select id="nf-mat">${DB.materials.map(m=>`<option value="${m.id}" ${m.id===prefill.materialId?'selected':''}>${esc(m.name)}</option>`).join('')}</select>
         </div>
-        <div><label>Nhà cung cấp</label><input type="text" id="nf-supplier" list="dl-suppliers-nf" placeholder="VD: Công ty CP VLXD ABC"></div>
+        <div><label>Nhà cung cấp</label><input type="text" id="nf-supplier" list="dl-suppliers-nf" value="${esc(prefill.supplier||'')}" placeholder="Chọn từ gợi ý hoặc gõ tên mới"></div>
       </div>
+      <div class="muted" style="margin:-4px 0 6px 0;">Muốn thêm nhà cung cấp khác: gõ thẳng tên mới vào ô trên — nhà cung cấp mới sẽ tự thành một nhóm riêng, đánh số tần suất từ đầu.</div>
       <datalist id="dl-suppliers-nf">${distinctSuppliers().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
       <label>Tần suất <span class="muted" style="font-weight:400;">— tự gợi ý số tiếp theo của nhóm, sửa được. VD: Tần suất 5 · TS5-TS6 (gộp)</span></label>
       <input type="text" id="nf-freq" placeholder="VD: Tần suất 5">
@@ -1401,8 +1410,9 @@ function openNewFrequencyModal(){
         status: document.getElementById('nf-date').value? 'da_lay':'chua_lay'
       };
       DB.samples.push(s);
+      state.open['s:'+materialId] = true; // giữ nhóm vật liệu mở để thấy ngay dòng vừa thêm
       persist();
-      showToast('Đã tạo tần suất mới.');
+      showToast('Đã thêm tần suất mới cho nhà cung cấp "'+supplier+'".');
       return true;
     }
   });
@@ -1882,7 +1892,15 @@ function closeModal(){
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{ navigator.serviceWorker.register('service-worker.js').catch(()=>{}); });
 }
+/** Nhớ nhóm vật liệu nào đang mở: <details> không báo "toggle" qua bubbling nên lắng nghe ở pha capture, chỉ gắn một lần. */
+function bindGroupMemory(){
+  document.getElementById('main').addEventListener('toggle', (e)=>{
+    const d = e.target;
+    if(d && d.dataset && d.dataset.gid) state.open[d.dataset.gid] = d.open;
+  }, true);
+}
 (async function init(){
+  bindGroupMemory();
   document.getElementById('main').innerHTML = `<div style="padding:60px 20px;text-align:center;color:var(--ink-soft);">Đang tải dữ liệu…</div>`;
   if(!CLOUD){ renderSidebar(); await loadData(); renderMain(); return; }
   hideSidebar();

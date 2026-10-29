@@ -96,6 +96,9 @@
   .lot-group summary .lot-group-sub{font-weight:400;color:var(--ink-soft);font-size:12.7px;}
   .lot-group-body{padding:4px 16px 10px 16px;background:var(--card);border-top:1px solid var(--line);}
   .lot-group-body .lot-header:last-child{border-bottom:none;}
+  .lot-parent{border-color:var(--navy-2);}
+  .lot-parent > summary{font-size:16.5px;color:var(--navy);background:rgba(21,42,67,.06);}
+  .lot-parent > .lot-group-body{padding:10px 12px 4px 12px;}
   .lot-name{font-weight:700;font-size:15.4px;}
   .lot-meta{font-size:12.7px;color:var(--ink-soft);margin-top:3px;}
   .slot-list{margin-top:8px;}
@@ -217,6 +220,40 @@ function groupRowsBySupplier(rows, getSupplier){
     g.rows.push(r);
   });
   return out;
+}
+/** Nhóm cha của một vật liệu: ưu tiên ô "Nhóm vật liệu" người dùng nhập; nếu để trống thì tự nhận theo tên
+ *  (mọi vật liệu bắt đầu bằng "Cống tròn" -> nhóm "Cống tròn"). Không có nhóm thì hiện riêng như trước. */
+function materialParentName(m){
+  if(!m) return null;
+  const g = (m.group===undefined || m.group===null)? '' : String(m.group).trim();
+  if(g) return g;
+  if(/^cong\s*tron\b/.test(stripDiacritics(m.name||'').toLowerCase().trim())) return 'Cống tròn';
+  return null;
+}
+function distinctMaterialGroups(){
+  const seen = new Map();
+  DB.materials.forEach(m=>{ const n = materialParentName(m); if(n && !seen.has(normSupplierKey(n))) seen.set(normSupplierKey(n), n); });
+  return [...seen.values()].sort((a,b)=>a.localeCompare(b));
+}
+/** Dựng danh sách 2 cấp: nhóm cha (VD "Cống tròn") chứa các vật liệu con; vật liệu không thuộc nhóm nào hiện riêng.
+ *  childFn(g) dựng HTML một vật liệu; summaryFn(children) dựng dòng tóm tắt bên phải tên nhóm cha. */
+function wrapByParent(groups, prefix, childFn, summaryFn){
+  const out = [], idx = {};
+  groups.forEach(g=>{
+    const pn = materialParentName(g.mat);
+    if(!pn){ out.push({name:null, children:[g]}); return; }
+    const k = normSupplierKey(pn);
+    if(!idx[k]){ idx[k] = {name:pn, children:[]}; out.push(idx[k]); }
+    idx[k].children.push(g);
+  });
+  return out.map(pg=>{
+    if(!pg.name) return childFn(pg.children[0]);
+    const gid = 'p:'+prefix+':'+normSupplierKey(pg.name);
+    return `<details class="lot-group lot-parent" data-gid="${esc(gid)}" ${state.open[gid]?'open':''}>
+      <summary><span>${esc(pg.name)}</span><span class="lot-group-sub">${summaryFn(pg.children)}</span></summary>
+      <div class="lot-group-body">${pg.children.map(childFn).join('')}</div>
+    </details>`;
+  }).join('');
 }
 function sampleFreqLabel(s){ return s.freqLabelOverride? s.freqLabelOverride : freqLabel(s.freqIndex); }
 /** How many "tần suất" a sample actually represents — not "1 dòng = 1 tần suất":
@@ -841,7 +878,7 @@ function renderDashboard(main){
         </select>
       </div>
       ${groups.length===0? `<div class="empty">Chưa có dữ liệu phù hợp. Vào mục "Khối lượng nhập hàng" để tạo đợt nhập hàng.</div>` :
-        groups.map(g=>{
+        wrapByParent(groups, 'd', g=>{
           const items = g.items.slice().sort((a,b)=> (a.s.supplier||'').localeCompare(b.s.supplier||'') || a.s.freqIndex-b.s.freqIndex);
           const totalFreq = sumFreqCount(items.map(r=>r.s));
           const hasKQTN = sumFreqCount(items.filter(r=>r.st.key==='pass').map(r=>r.s));
@@ -875,7 +912,7 @@ function renderDashboard(main){
               </table>`).join('')}
             </div>
           </details>`;
-        }).join('')
+        }, ch=>`${ch.length} loại · ${sumFreqCount(ch.flatMap(g=>g.items.map(r=>r.s)))} tần suất · ${sumFreqCount(ch.flatMap(g=>g.items.filter(r=>r.st.key==='pass').map(r=>r.s)))} đã có KQTN`)
       }
     </div>
   `;
@@ -894,11 +931,12 @@ function renderMaterials(main){
       <div class="card-title">Danh sách vật liệu <button class="btn small" id="mat-add">+ Thêm vật liệu</button></div>
       ${DB.materials.length===0? `<div class="empty">Chưa có vật liệu nào.</div>` : `
       <table>
-        <thead><tr><th>Tên vật liệu</th><th>Đơn vị</th><th>Định mức / mẫu</th><th>Chỉ tiêu thí nghiệm</th><th></th></tr></thead>
+        <thead><tr><th>Tên vật liệu</th><th>Nhóm</th><th>Đơn vị</th><th>Định mức / mẫu</th><th>Chỉ tiêu thí nghiệm</th><th></th></tr></thead>
         <tbody>
         ${DB.materials.map(m=>`
           <tr>
             <td>${esc(m.name)}</td>
+            <td class="muted">${esc(materialParentName(m))||'—'}</td>
             <td>${esc(m.unit)}</td>
             <td class="mono">${m.freqQty>0? `${fmtQty(m.freqQty)} ${esc(m.unit)}/mẫu` : '—'}</td>
             <td class="muted">${m.criteria.map(esc).join(', ')}</td>
@@ -940,6 +978,9 @@ function openMaterialModal(id){
     focusId: 'm-name',
     body: `
       <label>Tên vật liệu</label><input type="text" id="m-name" value="${esc(m.name)}" placeholder="VD: Cấp phối đá dăm móng đường">
+      <label>Nhóm vật liệu (tuỳ chọn) <span class="muted" style="font-weight:400;">— các vật liệu cùng nhóm được gom chung trong danh sách. Để trống = tự nhận theo tên (VD: tên bắt đầu bằng "Cống tròn" sẽ vào nhóm Cống tròn).</span></label>
+      <input type="text" id="m-group" list="dl-mgroups" value="${esc(m.group||'')}" placeholder="${esc(materialParentName(m)||'VD: Cống tròn')}">
+      <datalist id="dl-mgroups">${distinctMaterialGroups().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
       <div class="grid3">
         <div><label>Đơn vị tính</label><input type="text" id="m-unit" value="${esc(m.unit)}" placeholder="m³, tấn, m², ống..."></div>
         <div><label>Định mức / 1 mẫu</label><input type="number" min="0" step="any" id="m-freqqty" value="${m.freqQty}" placeholder="VD: 200"></div>
@@ -954,6 +995,7 @@ function openMaterialModal(id){
       const name = document.getElementById('m-name').value.trim();
       if(!name){ showToast('Vui lòng nhập tên vật liệu'); return false; }
       m.name = name;
+      { const gv = val('m-group'); if(gv) m.group = gv; else delete m.group; }
       m.unit = val('m-unit');
       m.freqQty = parseFloat(document.getElementById('m-freqqty').value) || 0;
       m.freqNote = val('m-freqnote');
@@ -1020,7 +1062,7 @@ function renderLots(main){
           .map(key=>({ mat: materialById(key), lots: byMat[key] }))
           .filter(g=>g.mat)
           .sort((a,b)=>a.mat.name.localeCompare(b.mat.name));
-        return matGroups.map(g=>{
+        return wrapByParent(matGroups, 'l', g=>{
           const totalQty = g.lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
           return `
           <details class="lot-group" data-gid="l:${g.mat.id}" ${state.open['l:'+g.mat.id]?'open':''}>
@@ -1043,7 +1085,7 @@ function renderLots(main){
                 </div>`).join('')}
             </div>
           </details>`;
-        }).join('');
+        }, ch=>`${ch.length} loại · ${ch.reduce((a,g)=>a+g.lots.length,0)} đợt nhập`);
       })()}
     </div>
   `;
@@ -1281,7 +1323,7 @@ function renderSampling(main){
           matGroupMap[a.mat.id].suppliers.push(a);
         });
         const matGroups = Object.values(matGroupMap).sort((x,y)=>x.mat.name.localeCompare(y.mat.name));
-        return matGroups.map(g=>{
+        return wrapByParent(matGroups, 's', g=>{
           const allSamples = g.suppliers.flatMap(a=>samplesForGroup(a.mat.id, a.supplier));
           const totalFreq = sumFreqCount(allSamples);
           const takenFreq = sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
@@ -1326,7 +1368,7 @@ function renderSampling(main){
               }).join('')}
             </div>
           </details>`;
-        }).join('');
+        }, ch=>{ const all=ch.flatMap(g=>g.suppliers.flatMap(a=>samplesForGroup(a.mat.id,a.supplier))); return `${ch.length} loại · ${sumFreqCount(all)} tần suất · ${sumFreqCount(all.filter(x=>x.status!=='chua_lay'))} đã lấy`; });
       })()}
     </div>`}
   `;
@@ -1411,6 +1453,7 @@ function openNewFrequencyModal(prefill){
       };
       DB.samples.push(s);
       state.open['s:'+materialId] = true; // giữ nhóm vật liệu mở để thấy ngay dòng vừa thêm
+      { const pn = materialParentName(materialById(materialId)); if(pn) state.open['p:s:'+normSupplierKey(pn)] = true; }
       persist();
       showToast('Đã thêm tần suất mới cho nhà cung cấp "'+supplier+'".');
       return true;

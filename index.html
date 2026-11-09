@@ -171,6 +171,7 @@
 </div>
 <script>
 const STORAGE_KEY = 'qlvl_data_v1_opt';
+const APP_VERSION = '2026.11.06-nghiem-thu'; // hiện ở góc menu để đối chiếu đang chạy đúng bản mới
 const TABS = [
   {id:'dashboard', label:'Tổng quan', icon:'▤'},
   {id:'materials', label:'Danh mục vật liệu', icon:'▣'},
@@ -206,7 +207,7 @@ function freqChipHtml(label){
 }
 /** Nhãn trạng thái: nhãn dài "Đã lấy mẫu — chưa có KQTN" tách làm 2 dòng gọn ở chỗ gạch ngang, không bị bẻ giữa chừng. */
 function statusBadgeHtml(st){
-  const cls = st.key==='pending'?'pending':st.key==='taken'?'taken':st.key;
+  const cls = ({pending:'pending', taken:'taken', pass:'pass', accepted:'pass', unaccepted:'warn'})[st.key] || st.key;
   const lines = String(st.label||'').split(' — ');
   return `<span class="badge ${cls}${lines.length>1?' multi':''}">${lines.map(l=>`<span class="bl">${esc(l)}</span>`).join('')}</span>`;
 }
@@ -227,7 +228,8 @@ function materialParentName(m){
   if(!m) return null;
   const g = (m.group===undefined || m.group===null)? '' : String(m.group).trim();
   if(g) return g;
-  if(/^cong\s*tron\b/.test(stripDiacritics(m.name||'').toLowerCase().trim())) return 'Cống tròn';
+  const nm = stripDiacritics(m.name||'').toLowerCase().trim();
+  if(/^cong\s*tron\b/.test(nm) || /^(goi cong|gioang cao su cong|phu kien cong)\b/.test(nm)) return 'Cống tròn';
   return null;
 }
 function distinctMaterialGroups(){
@@ -255,11 +257,16 @@ function wrapByParent(groups, prefix, childFn, summaryFn){
     </details>`;
   }).join('');
 }
-function sampleFreqLabel(s){ return s.freqLabelOverride? s.freqLabelOverride : freqLabel(s.freqIndex); }
+function sampleFreqLabel(s){
+  if(s.freqLabelOverride) return s.freqLabelOverride;
+  if(sampleIsNoSampling(s)) return 'Lần '+String(s.freqIndex).padStart(2,'0'); // phụ kiện không phải "tần suất"
+  return freqLabel(s.freqIndex);
+}
 /** How many "tần suất" a sample actually represents — not "1 dòng = 1 tần suất":
  *  "Đầu vào" / "Nghi ngờ / thử lại" đếm là 0 (không phải một tần suất định kỳ), một nhãn gộp
  *  như "Tần suất 2, Tần suất 3" đếm là 2, còn lại (kể cả mẫu tạo tay không có nhãn) đếm là 1. */
 function sampleFreqCount(s){
+  if(sampleIsNoSampling(s)) return 0; // phụ kiện / gối cống không tính vào tần suất
   const label = (s.freqLabelOverride||'').trim();
   if(!label) return 1;
   if(label==='Đầu vào' || label==='Nghi ngờ / thử lại') return 0;
@@ -352,7 +359,11 @@ function showToast(msg){
 function materialById(id){ return DB.materials.find(m=>m.id===id); }
 function lotById(id){ return DB.lots.find(l=>l.id===id); }
 function sampleById(id){ return DB.samples.find(s=>s.id===id); }
+/** Vật liệu "chỉ nghiệm thu" (gối cống, gioăng cao su, phụ kiện...): không lấy mẫu, không có KQTN — chỉ cần Số BBNT. */
+function isNoSampling(materialId){ const m = materialById(materialId); return !!(m && m.noSampling); }
+function sampleIsNoSampling(s){ return isNoSampling(s.materialId); }
 function sampleStatus(s){
+  if(sampleIsNoSampling(s)) return (s.sampleCode && String(s.sampleCode).trim())? {key:'accepted', label:'Đã nghiệm thu'} : {key:'unaccepted', label:'Chưa nghiệm thu'};
   if(s.status==='chua_lay') return {key:'pending', label:'Chưa lấy mẫu'};
   if(s.soKQTN && s.soKQTN.trim()!=='') return {key:'pass', label:'Đã có KQTN'};
   return {key:'taken', label:'Đã lấy mẫu — chưa có KQTN'};
@@ -390,10 +401,12 @@ function aggregateForGroup(materialId, supplier){
   const lots = DB.lots.filter(l=>l.materialId===materialId && normSupplierKey(l.supplier)===key);
   const totalQty = lots.reduce((a,l)=>a+(parseFloat(l.quantity)||0),0);
   const allSamples = samplesForGroup(materialId, supplier);
-  const taken = sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
-  const requiredTotal = (mat && mat.freqQty>0) ? Math.max(1, Math.ceil(totalQty/mat.freqQty)) : null;
+  const noSampling = !!(mat && mat.noSampling);
+  const records = allSamples.length;
+  const taken = noSampling? allSamples.filter(s=>s.sampleCode && String(s.sampleCode).trim()).length : sumFreqCount(allSamples.filter(s=>s.status!=='chua_lay'));
+  const requiredTotal = (!noSampling && mat && mat.freqQty>0) ? Math.max(1, Math.ceil(totalQty/mat.freqQty)) : null;
   const remaining = requiredTotal===null ? null : Math.max(0, requiredTotal-taken);
-  return { mat, supplier, totalQty, requiredTotal, taken, remaining, lotsCount: lots.length };
+  return { mat, supplier, totalQty, requiredTotal, taken, remaining, lotsCount: lots.length, noSampling, records };
 }
 /** How many tần suất a group should have right now: driven by quantity/định mức when known, otherwise at least one per đợt nhập hàng. */
 function requiredForGroup(materialId, supplier){
@@ -751,6 +764,7 @@ function renderSidebar(){
     <div class="brand">
       <div class="brand-title">Quản lý lấy mẫu vật liệu</div>
       <div class="brand-sub">Hạ tầng đường đô thị</div>
+      <div class="brand-sub" style="margin-top:2px;">Phiên bản ${APP_VERSION}</div>
     </div>
     ${tabs.map(t=>`<div class="nav-item ${state.tab===t.id?'active':''}" data-tab="${t.id}"><span class="nav-icon">${t.icon}</span>${t.label}</div>`).join('')}
     ${CLOUD && profile? `
@@ -810,6 +824,8 @@ function renderDashboard(main){
   const taken = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='taken';}));
   const hasKQTNStat = sumFreqCount(all.filter(s=>{const st=sampleStatus(s); return st.key==='pass';}));
   const total = pending + taken + hasKQTNStat;
+  const accAll = all.filter(sampleIsNoSampling);
+  const accOk = accAll.filter(x=>sampleStatus(x).key==='accepted').length;
 
   const f = state.filters;
   let rows = all.map(s=>{
@@ -840,22 +856,23 @@ function renderDashboard(main){
       <div class="stat amber"><div class="stat-num">${pending}</div><div class="stat-label">Chưa lấy mẫu</div></div>
       <div class="stat" style="border-color:var(--line)"><div class="stat-num" style="color:var(--slate)">${taken}</div><div class="stat-label">Đã lấy mẫu — chưa KQTN</div></div>
       <div class="stat green"><div class="stat-num">${hasKQTNStat}</div><div class="stat-label">Đã có KQTN</div></div>
+      ${accAll.length>0? `<div class="stat navy"><div class="stat-num">${accOk}/${accAll.length}</div><div class="stat-label">Phụ kiện / gối cống đã nghiệm thu</div></div>` : ''}
     </div>
     ${aggs.length>0? `
     <div class="card">
       <div class="card-title">Tiến độ lấy mẫu theo vật liệu &amp; nhà cung cấp</div>
       ${aggs.map(a=>{
-        const pct = a.requiredTotal? Math.min(100, Math.round(a.taken/a.requiredTotal*100)) : (a.taken>0?100:0);
-        const isFull = a.requiredTotal!==null && a.remaining===0;
+        const pct = a.noSampling? (a.records? Math.round(a.taken/a.records*100) : 0) : a.requiredTotal? Math.min(100, Math.round(a.taken/a.requiredTotal*100)) : (a.taken>0?100:0);
+        const isFull = a.noSampling? (a.records>0 && a.taken===a.records) : (a.requiredTotal!==null && a.remaining===0);
         return `
         <div class="progress-item">
           <div class="progress-top">
             <div>
               <div class="progress-name">${esc(a.mat.name)} <span class="muted" style="font-weight:400;">— NCC: ${esc(a.supplier)||'Chưa rõ'}</span></div>
-              <div class="progress-sub">Tổng khối lượng đã về: ${fmtQty(a.totalQty)} ${esc(a.mat.unit)}${a.mat.freqQty>0? ` · Định mức ${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
+              <div class="progress-sub">Tổng khối lượng đã về: ${fmtQty(a.totalQty)} ${esc(a.mat.unit)}${a.noSampling? ' · Không cần lấy mẫu / KQTN' : a.mat.freqQty>0? ` · Định mức ${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : ' · Chưa có định mức'}</div>
             </div>
             <div class="progress-nums">
-              ${a.requiredTotal===null? 'Chưa tính được tần suất' : `Đã lấy ${a.taken}/${a.requiredTotal} tần suất`}
+              ${a.noSampling? `Chỉ nghiệm thu — đã nghiệm thu ${a.taken}/${a.records}` : a.requiredTotal===null? 'Chưa tính được tần suất' : `Đã lấy ${a.taken}/${a.requiredTotal} tần suất`}
               ${a.remaining>0? ` · <span style="color:var(--amber);font-weight:700;">còn ${a.remaining}</span>` : (a.requiredTotal!==null? ` · <span style="color:var(--green);font-weight:700;">đã đủ</span>` : '')}
             </div>
           </div>
@@ -875,6 +892,8 @@ function renderDashboard(main){
           <option value="pending" ${f.status==='pending'?'selected':''}>Chưa lấy mẫu</option>
           <option value="taken" ${f.status==='taken'?'selected':''}>Đã lấy mẫu — chưa KQTN</option>
           <option value="pass" ${f.status==='pass'?'selected':''}>Đã có KQTN</option>
+          <option value="accepted" ${f.status==='accepted'?'selected':''}>Phụ kiện — đã nghiệm thu</option>
+          <option value="unaccepted" ${f.status==='unaccepted'?'selected':''}>Phụ kiện — chưa nghiệm thu</option>
         </select>
       </div>
       ${groups.length===0? `<div class="empty">Chưa có dữ liệu phù hợp. Vào mục "Khối lượng nhập hàng" để tạo đợt nhập hàng.</div>` :
@@ -901,8 +920,7 @@ function renderDashboard(main){
                       <td>${freqChipHtml(sampleFreqLabel(r.s))}</td>
                       <td class="mono">${r.s.quantity? fmtQty(r.s.quantity) : '—'}</td>
                       <td class="nw">${daNghiemThu? `<span class="mono">${esc(r.s.sampleCode)}</span>` : `<span class="badge warn">Chưa nghiệm thu</span>`}</td>
-                      <td class="mono">${esc(r.s.soKQTN)||'—'}</td>
-                      <td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>
+                      ${sampleIsNoSampling(r.s)? '<td class="muted" colspan="2">Không cần lấy mẫu / KQTN</td>' : `<td class="mono">${esc(r.s.soKQTN)||'—'}</td><td class="muted">${esc(r.s.phongThiNghiem)||'—'}</td>`}
                       <td class="nw">${esc(r.s.dateTaken)||'—'}</td>
                       <td class="nw">${esc(r.s.ngayKQTN)||'—'}</td>
                       <td>${statusBadgeHtml(r.st)}</td>
@@ -935,7 +953,7 @@ function renderMaterials(main){
         <tbody>
         ${DB.materials.map(m=>`
           <tr>
-            <td>${esc(m.name)}</td>
+            <td>${esc(m.name)}${m.noSampling? ' <span class="badge pending">Chỉ nghiệm thu</span>' : ''}</td>
             <td class="muted">${esc(materialParentName(m))||'—'}</td>
             <td>${esc(m.unit)}</td>
             <td class="mono">${m.freqQty>0? `${fmtQty(m.freqQty)} ${esc(m.unit)}/mẫu` : '—'}</td>
@@ -981,6 +999,7 @@ function openMaterialModal(id){
       <label>Nhóm vật liệu (tuỳ chọn) <span class="muted" style="font-weight:400;">— các vật liệu cùng nhóm được gom chung trong danh sách. Để trống = tự nhận theo tên (VD: tên bắt đầu bằng "Cống tròn" sẽ vào nhóm Cống tròn).</span></label>
       <input type="text" id="m-group" list="dl-mgroups" value="${esc(m.group||'')}" placeholder="${esc(materialParentName(m)||'VD: Cống tròn')}">
       <datalist id="dl-mgroups">${distinctMaterialGroups().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:12px 0 4px 0;"><input type="checkbox" class="chk" id="m-nosampling" ${m.noSampling?'checked':''} style="margin-top:3px;"><span><b>Chỉ nghiệm thu — không cần lấy mẫu / KQTN</b> (VD: gối cống, gioăng cao su, phụ kiện). Chỉ ghi Số BBNT, không tính vào tần suất.</span></label>
       <div class="grid3">
         <div><label>Đơn vị tính</label><input type="text" id="m-unit" value="${esc(m.unit)}" placeholder="m³, tấn, m², ống..."></div>
         <div><label>Định mức / 1 mẫu</label><input type="number" min="0" step="any" id="m-freqqty" value="${m.freqQty}" placeholder="VD: 200"></div>
@@ -996,6 +1015,7 @@ function openMaterialModal(id){
       if(!name){ showToast('Vui lòng nhập tên vật liệu'); return false; }
       m.name = name;
       { const gv = val('m-group'); if(gv) m.group = gv; else delete m.group; }
+      if(document.getElementById('m-nosampling').checked) m.noSampling = true; else delete m.noSampling;
       m.unit = val('m-unit');
       m.freqQty = parseFloat(document.getElementById('m-freqqty').value) || 0;
       m.freqNote = val('m-freqnote');
@@ -1044,7 +1064,7 @@ function renderLots(main){
               <td class="mono">${a.lotsCount}</td>
               <td class="mono">${fmtQty(a.totalQty)} ${esc(a.mat.unit)}</td>
               <td class="mono">${a.mat.freqQty>0? `${fmtQty(a.mat.freqQty)} ${esc(a.mat.unit)}/mẫu` : '—'}</td>
-              <td class="mono">${a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
+              <td class="mono">${a.noSampling? `<span class="muted">Chỉ nghiệm thu</span>` : a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -1306,8 +1326,8 @@ function renderSampling(main){
               <td>${esc(a.mat.name)}</td>
               <td>${esc(a.supplier)||'—'}</td>
               <td class="mono">${fmtQty(a.totalQty)} ${esc(a.mat.unit)}</td>
-              <td class="mono">${a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
-              <td class="mono">${a.taken}</td>
+              <td class="mono">${a.noSampling? `<span class="muted">Chỉ nghiệm thu</span>` : a.requiredTotal===null? `<span class="muted">Chưa có định mức</span>` : a.requiredTotal}</td>
+              <td class="mono">${a.noSampling? a.taken+'/'+a.records+' nghiệm thu' : a.taken}</td>
               <td>${a.remaining===null? '—' : a.remaining>0? `<span class="badge pending">Còn ${a.remaining}</span>` : `<span class="badge pass">Đã đủ</span>`}</td>
             </tr>`).join('')}
         </tbody>
@@ -1353,8 +1373,7 @@ function renderSampling(main){
                       <td>${esc(s.location)||'—'}</td>
                       <td>${esc(s.personTaken)||'—'}</td>
                       <td class="nw">${esc(s.dateTaken)||'—'}</td>
-                      <td class="mono">${esc(s.soKQTN)||'—'}</td>
-                      <td class="muted">${esc(s.phongThiNghiem)||'—'}</td>
+                      ${sampleIsNoSampling(s)? '<td class="muted" colspan="2">Không cần lấy mẫu / KQTN</td>' : `<td class="mono">${esc(s.soKQTN)||'—'}</td><td class="muted">${esc(s.phongThiNghiem)||'—'}</td>`}
                       <td class="nw">${esc(s.ngayKQTN)||'—'}</td>
                       <td>${statusBadgeHtml(st)}</td>
                       <td class="row-flex">
@@ -1404,8 +1423,11 @@ function openNewFrequencyModal(prefill){
       </div>
       <div class="muted" style="margin:-4px 0 6px 0;">Muốn thêm nhà cung cấp khác: gõ thẳng tên mới vào ô trên — nhà cung cấp mới sẽ tự thành một nhóm riêng, đánh số tần suất từ đầu.</div>
       <datalist id="dl-suppliers-nf">${distinctSuppliers().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
+      <div id="nf-freq-wrap">
       <label>Tần suất <span class="muted" style="font-weight:400;">— tự gợi ý số tiếp theo của nhóm, sửa được. VD: Tần suất 5 · TS5-TS6 (gộp)</span></label>
       <input type="text" id="nf-freq" placeholder="VD: Tần suất 5">
+      </div>
+      <div id="nf-nos-hint" class="muted" style="display:none;margin:6px 0;">Vật liệu <b>chỉ nghiệm thu</b> (gối cống, phụ kiện...): chỉ cần Số BBNT, không cần lấy mẫu hay KQTN.</div>
       <div class="grid2">
         <div><label>Số BBNT</label><input type="text" id="nf-code" placeholder="VD: BBNT-01"></div>
         <div><label>Khối lượng đại diện</label><input type="text" id="nf-qty" placeholder="VD: 500 m³"></div>
@@ -1416,12 +1438,14 @@ function openNewFrequencyModal(prefill){
       </div>
       <label>Vị trí lấy mẫu</label>
       <input type="text" id="nf-loc" placeholder="VD: Lý trình Km0+120, tim tuyến">
+      <div id="nf-kqtn-wrap">
       <div class="grid2">
         <div><label>Số KQTN</label><input type="text" id="nf-sokqtn" placeholder="VD: KQTN-001"></div>
         <div><label>Phòng thí nghiệm</label><input type="text" id="nf-lab" placeholder="Tên phòng LAS-XD..."></div>
       </div>
       <div class="grid2">
         <div><label>Ngày có KQTN</label><input type="date" id="nf-ngaykqtn"></div>
+      </div>
       </div>
       <label>Ghi chú</label>
       <textarea id="nf-note"></textarea>
@@ -1434,22 +1458,30 @@ function openNewFrequencyModal(prefill){
       sup.addEventListener('input', suggest);
       sup.addEventListener('change', suggest);
       fr.addEventListener('input', ()=>{ touched = true; });
-      suggest();
+      function applyMode(){
+        const noS = isNoSampling(matSel.value);
+        document.getElementById('nf-freq-wrap').style.display = noS? 'none' : '';
+        document.getElementById('nf-kqtn-wrap').style.display = noS? 'none' : '';
+        document.getElementById('nf-nos-hint').style.display = noS? '' : 'none';
+      }
+      matSel.addEventListener('change', applyMode);
+      suggest(); applyMode();
     },
     onSave: ()=>{
       const materialId = document.getElementById('nf-mat').value;
       const supplier = val('nf-supplier');
       if(!materialId){ showToast('Vui lòng chọn vật liệu'); return false; }
       if(!supplier){ showToast('Vui lòng nhập nhà cung cấp'); return false; }
+      const noS = isNoSampling(materialId);
       const group = samplesForGroup(materialId, supplier);
       const nextIdx = group.length>0? group[group.length-1].freqIndex+1 : 1;
       const s = {
         id:uid('smp'), materialId, supplier, freqIndex:nextIdx,
         sampleCode: val('nf-code'), quantity: val('nf-qty'),
         dateTaken: document.getElementById('nf-date').value, personTaken: val('nf-person'),
-        location: val('nf-loc'), soKQTN: val('nf-sokqtn'), phongThiNghiem: val('nf-lab'),
-        ngayKQTN: document.getElementById('nf-ngaykqtn').value, note: val('nf-note'), freqLabelOverride: parseTanSuatLabel(val('nf-freq')) || nextFreqLabel(materialId, supplier),
-        status: document.getElementById('nf-date').value? 'da_lay':'chua_lay'
+        location: val('nf-loc'), soKQTN: noS? '' : val('nf-sokqtn'), phongThiNghiem: noS? '' : val('nf-lab'),
+        ngayKQTN: noS? '' : document.getElementById('nf-ngaykqtn').value, note: val('nf-note'), freqLabelOverride: noS? '' : (parseTanSuatLabel(val('nf-freq')) || nextFreqLabel(materialId, supplier)),
+        status: (noS || document.getElementById('nf-date').value)? 'da_lay':'chua_lay'
       };
       DB.samples.push(s);
       state.open['s:'+materialId] = true; // giữ nhóm vật liệu mở để thấy ngay dòng vừa thêm
@@ -1463,45 +1495,50 @@ function openNewFrequencyModal(prefill){
 function openSampleModal(id){
   const s = sampleById(id);
   const mat = materialById(s.materialId);
+  const noS = !!(mat && mat.noSampling);
   openModal({
-    title: `Lấy mẫu — ${mat?mat.name:''} — ${esc(s.supplier)||'Chưa rõ NCC'} — ${sampleFreqLabel(s)}`,
+    title: `${noS?'Nghiệm thu':'Lấy mẫu'} — ${mat?mat.name:''} — ${esc(s.supplier)||'Chưa rõ NCC'} — ${sampleFreqLabel(s)}`,
     focusId: 's-code',
     body: `
-      <label>Tần suất <span class="muted" style="font-weight:400;">— sửa được. VD: Tần suất 5 · TS3-TS4 (gộp nhiều tần suất) · ĐV · NN · để trống = tự đánh số</span></label>
-      <input type="text" id="s-freq" value="${esc(sampleFreqLabel(s))}">
+      ${noS? `<div class="muted" style="margin-bottom:6px;">Vật liệu <b>chỉ nghiệm thu</b> (gối cống, phụ kiện...): chỉ cần Số BBNT, không cần lấy mẫu hay KQTN.</div>` : `<label>Tần suất <span class="muted" style="font-weight:400;">— sửa được. VD: Tần suất 5 · TS3-TS4 (gộp nhiều tần suất) · ĐV · NN · để trống = tự đánh số</span></label>
+      <input type="text" id="s-freq" value="${esc(sampleFreqLabel(s))}">`}
       <div class="grid2">
         <div><label>Số BBNT</label><input type="text" id="s-code" value="${esc(s.sampleCode)}" placeholder="VD: BBNT-01"></div>
         <div><label>Khối lượng đại diện</label><input type="text" id="s-qty" value="${esc(s.quantity)}" placeholder="VD: 500 m³"></div>
       </div>
       <div class="grid2">
-        <div><label>Ngày lấy mẫu</label><input type="date" id="s-date" value="${esc(s.dateTaken)}"></div>
-        <div><label>Người lấy mẫu</label><input type="text" id="s-person" value="${esc(s.personTaken)}"></div>
+        <div><label>${noS?'Ngày nghiệm thu / giao nhận':'Ngày lấy mẫu'}</label><input type="date" id="s-date" value="${esc(s.dateTaken)}"></div>
+        <div><label>${noS?'Người phụ trách':'Người lấy mẫu'}</label><input type="text" id="s-person" value="${esc(s.personTaken)}"></div>
       </div>
       <label>Vị trí lấy mẫu cụ thể</label>
       <input type="text" id="s-loc" value="${esc(s.location)}" placeholder="VD: Lý trình Km0+120, tim tuyến">
-      <div class="grid2">
+      ${noS? '' : `<div class="grid2">
         <div><label>Số KQTN</label><input type="text" id="s-sokqtn" value="${esc(s.soKQTN)}" placeholder="VD: KQTN-001"></div>
         <div><label>Phòng thí nghiệm</label><input type="text" id="s-lab" value="${esc(s.phongThiNghiem)}" placeholder="Tên phòng LAS-XD..."></div>
       </div>
       <div class="grid2">
         <div><label>Ngày có KQTN</label><input type="date" id="s-ngaykqtn" value="${esc(s.ngayKQTN)}"></div>
-      </div>
+      </div>`}
       <label>Ghi chú</label>
       <textarea id="s-note">${esc(s.note)}</textarea>
     `,
     onSave: ()=>{
-      const freqParsed = parseTanSuatLabel(val('s-freq'));
-      if(freqParsed !== parseTanSuatLabel(sampleFreqLabel(s))) s.freqLabelOverride = freqParsed; // chỉ đổi khi người dùng thật sự sửa
+      if(!noS){
+        const freqParsed = parseTanSuatLabel(val('s-freq'));
+        if(freqParsed !== parseTanSuatLabel(sampleFreqLabel(s))) s.freqLabelOverride = freqParsed; // chỉ đổi khi người dùng thật sự sửa
+      }
       s.sampleCode = val('s-code');
       s.quantity = val('s-qty');
       s.dateTaken = document.getElementById('s-date').value;
       s.personTaken = val('s-person');
       s.location = val('s-loc');
-      s.soKQTN = val('s-sokqtn');
-      s.phongThiNghiem = val('s-lab');
-      s.ngayKQTN = document.getElementById('s-ngaykqtn').value;
+      if(!noS){
+        s.soKQTN = val('s-sokqtn');
+        s.phongThiNghiem = val('s-lab');
+        s.ngayKQTN = document.getElementById('s-ngaykqtn').value;
+      }
       s.note = val('s-note');
-      if(!s.dateTaken){ showToast('Vui lòng nhập ngày lấy mẫu'); return false; }
+      if(!noS && !s.dateTaken){ showToast('Vui lòng nhập ngày lấy mẫu'); return false; }
       s.status = 'da_lay';
       persist();
       return true;
